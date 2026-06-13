@@ -38,7 +38,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v12 担当DF・距離制御</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v13 守備圧・追従強化</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -54,7 +54,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 <script>
 const field=document.getElementById("field"),svg=document.getElementById("lines"),msg=document.getElementById("msg"),status=document.getElementById("status"),roster=document.getElementById("roster"),judge=document.getElementById("judge"),logBox=document.getElementById("log"),targetBox=document.getElementById("targetBox"),shootBtn=document.getElementById("shootBtn");
 let players=[],enemies=[],owner=0,selected=0,score=0,turn=1,attackLog=[];
-let holdTurn=0,holderId=0;
+let holdTurn=0,holderId=0,eOffballStreak=0,pressLevel=0;
 let receivedTurn=0,lastReceiveWasPass=false;
 let lastCoverTarget=null,lastMarkTarget=null,lastSwTarget=null;
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min}
@@ -82,13 +82,32 @@ function createEnemies(){
  ];
 }
 function resetPositions(){const xs=[12,30,31,58,78],ys=[50,28,72,45,50];players.forEach((p,i)=>{p.x=xs[i];p.y=ys[i]});enemies.forEach(e=>{e.x=e.homeX;e.y=e.homeY})}
-function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
+function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
 function rerollTeam(){createTeam();createEnemies();resetMatch();showJudge("TEAM RESET","能力再抽選",1800)}
 function saveTeam(){localStorage.setItem("markCircleTeam",JSON.stringify({players,enemies}));showJudge("SAVE","チーム保存",1800);msg.textContent="現在のチーム能力を保存しました。"}
 function loadTeam(){const data=localStorage.getItem("markCircleTeam");if(!data){showJudge("NO DATA","保存なし",2000);msg.textContent="保存チームがありません。";return}const saved=JSON.parse(data);players=saved.players;enemies=saved.enemies;resetMatch();showJudge("LOAD","保存チーム",1800)}
-function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;}
+function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;}
 function marks(p){return enemies.filter(e=>e.role!=="keeper"&&dist(p,e)<e.r)}
-function lineDef(a,b){let total=0;enemies.forEach(e=>{const dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy;if(!len)return;const t=Math.max(0,Math.min(1,((e.x-a.x)*dx+(e.y-a.y)*dy)/len));const px=a.x+t*dx,py=a.y+t*dy;if(Math.hypot(px-e.x,py-e.y)<e.r*.65)total+=e.def});return total}
+function lineDef(a,b){
+ let total=0;
+ enemies.forEach(e=>{
+  if(e.role==="keeper")return;
+  const dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy;
+  if(!len)return;
+  const t=Math.max(0,Math.min(1,((e.x-a.x)*dx+(e.y-a.y)*dy)/len));
+  const px=a.x+t*dx,py=a.y+t*dy;
+  const d=Math.hypot(px-e.x,py-e.y);
+
+  // パスレーン遮断を強化。近いほど大きく減点。
+  if(t>.05&&t<.95&&d<e.r*.95){
+   let rate=.45;
+   if(d<e.r*.35)rate=1.00;
+   else if(d<e.r*.60)rate=.75;
+   total+=Math.floor(e.def*rate);
+  }
+ });
+ return total;
+}
 function receiverRisk(to){
  // 受けた後の危険度。パス成功判定とは分ける。
  const receiveDef=marks(to).reduce((s,e)=>s+e.def,0);
@@ -105,19 +124,22 @@ function passerPressure(from){
 function passDifficulty(from,to){
  const distancePenalty=Math.floor(dist(from,to)/4);
  const courseDef=lineDef(from,to);
- const pressure=passerPressure(from);
+ const pressure=passerPressure(from)+currentPressPenalty();
 
  // パスが「通るか」は、距離・コース・出し手圧力を中心に見る。
- // 受け手周辺の密集はここでは弱くしか見ない。
  const lightReceive=Math.floor(marks(to).reduce((s,e)=>s+e.def,0)*0.18);
 
- const total=distancePenalty+courseDef+pressure+lightReceive;
+ // 危険ゾーンへのラストパスは、コースを切られていたら重くする
+ const lastPassDanger=(to.role==="フィニッシャー"&&to.x>70)?Math.floor(courseDef*.35):0;
+
+ const total=distancePenalty+courseDef+pressure+lightReceive+lastPassDanger;
 
  return{
   distancePenalty,
   courseDef,
   pressure,
   lightReceive,
+  lastPassDanger,
   receiveRisk:receiverRisk(to),
   total
  };
@@ -132,9 +154,9 @@ function passColor(from,to){
 
 function passTo(i){
  if(i===owner){selected=i;draw();return}
- const from=players[owner],to=players[i],diff=passDifficulty(from,to),attack=from.pass+rand(1,5),defense=diff.total;turn++;
- if(attack>defense){attackLog.push(`${from.n}→${to.n} パス成功`);owner=i;selected=i;holderId=i;holdTurn=0;receivedTurn=turn;lastReceiveWasPass=true;showJudge("PASS SUCCESS","パス成功",1800);msg.textContent=`${from.n}→${to.n} 成功。パス${attack} ＞ 守備${defense} / 受け後リスク${diff.receiveRisk}`;defenseMove("pass");pressureCheck()}
- else{attackLog.push(`${from.n}→${to.n} パス失敗`);showJudge("PASS FAILED","パス失敗",2200);msg.textContent=`カット。パス${attack} ＜ 守備${defense} / 受け後リスク${diff.receiveRisk}`;counterAttack();resetAttackOnly()}
+ const from=players[owner],to=players[i],diff=passDifficulty(from,to),pressPenalty=currentPressPenalty(),attack=from.pass+rand(1,5)-pressPenalty,defense=diff.total;turn++;
+ if(attack>defense){attackLog.push(`${from.n}→${to.n} パス成功`);owner=i;selected=i;holderId=i;holdTurn=0;eOffballStreak=0;receivedTurn=turn;lastReceiveWasPass=true;showJudge("PASS SUCCESS","パス成功",1800);msg.textContent=`${from.n}→${to.n} 成功。パス${attack} ＞ 守備${defense} / 圧力-${pressPenalty} / 受け後リスク${diff.receiveRisk}`;defenseMove("pass");pressureCheck()}
+ else{attackLog.push(`${from.n}→${to.n} パス失敗`);showJudge("PASS FAILED","パス失敗",2200);msg.textContent=`カット。パス${attack} ＜ 守備${defense} / 圧力-${pressPenalty} / 受け後リスク${diff.receiveRisk}`;counterAttack();resetAttackOnly()}
  draw();
 }
 
@@ -143,15 +165,16 @@ function moveDir(dx,dy){
  const nx=dx/len,ny=dy/len,oldX=p.x,oldY=p.y;p.x=clamp(p.x+nx*p.spd,6,84);p.y=clamp(p.y+ny*p.spd,10,90);turn++;
  if(selected===owner){
   holdTurn=0;
+  eOffballStreak=0;
   lastReceiveWasPass=false;
   const contact=marks(p);
   if(contact.length){
-   const attack=p.one+rand(0,2),advancePenalty=Math.floor(p.x/25),defense=contact.reduce((s,e)=>s+e.def,0)+advancePenalty;
+   const pressPenalty=currentPressPenalty(),attack=p.one+rand(0,2)-pressPenalty,advancePenalty=Math.floor(p.x/25),defense=contact.reduce((s,e)=>s+e.def,0)+advancePenalty;
    if(attack>defense){attackLog.push(`${p.n} 1on1突破`);showJudge("1on1 WIN","突破成功",2000);msg.textContent=`${p.n}突破。1on1 ${attack} ＞ 守備${defense}`;supportMoveAfterDribble();defenseMove("ball")}
    else{p.x=oldX;p.y=oldY;attackLog.push(`${p.n} 1on1失敗`);showJudge("1on1 LOSE","突破失敗",2600);msg.textContent=`止められた。1on1 ${attack} ＜ 守備${defense}`;counterAttack();resetAttackOnly()}
   }else{attackLog.push(`${p.n} ドリブル`);showJudge("DRIBBLE","移動",1400);msg.textContent=`${p.n}がV${p.spd}でドリブル。`;supportMoveAfterDribble();defenseMove("ball")}
  }else{
-  attackLog.push(`${p.n} オフボール移動`);showJudge("MOVE","味方移動",1400);msg.textContent=`${p.n}を動かした。危険選手には担当DFがついていく。`;holdTurn++;defenseMove("offball",p);pressureCheck()
+  attackLog.push(`${p.n} オフボール移動`);showJudge("MOVE","味方移動",1400);msg.textContent=`${p.n}を動かした。危険選手には担当DFがついていく。`;if(p.role==="フィニッシャー")eOffballStreak++;else eOffballStreak=0;holdTurn++;defenseMove("offball",p);pressureCheck()
  }
  draw();
 }
@@ -171,6 +194,16 @@ function shotContactDef(shooter){
  const goal={x:96,y:50};let total=0;
  const gx=goal.x-shooter.x,gy=goal.y-shooter.y,glen=Math.hypot(gx,gy)||1,goalDirX=gx/glen,goalDirY=gy/glen;
  marks(shooter).forEach(e=>{const dx=e.x-shooter.x,dy=e.y-shooter.y,dlen=Math.hypot(dx,dy)||1,defDirX=dx/dlen,defDirY=dy/dlen,dot=goalDirX*defDirX+goalDirY*defDirY;let rate=.2;if(dot>.5)rate=1;else if(dot>-.2)rate=.5;total+=Math.floor(e.def*rate)});
+
+ // E単独オフボールで作った危険ゾーンの完全フリーだけ抑制。
+ // 常時接触保証ではなく、ゴール前・単独移動連発・担当DFが近い場合だけ。
+ if(total===0 && shooter.role==="フィニッシャー" && shooter.x>72 && Math.abs(shooter.y-50)<28 && eOffballStreak>=2){
+  const marker=enemies.find(e=>e.role==="mark");
+  if(marker && dist(marker,shooter)<18){
+   total+=Math.floor(marker.def*.45);
+  }
+ }
+
  return total;
 }
 function shotCourseDef(shooter){
@@ -192,12 +225,12 @@ function finishBonus(contactDef,courseDef){
  return bonus;
 }
 
-function shotScore(){const p=players[owner],goal={x:96,y:50},distancePenalty=Math.floor(dist(p,goal)/6),contactDef=shotContactDef(p),courseDef=shotCourseDef(p),keeper=enemies.find(e=>e.role==="keeper").def,bonus=finishBonus(contactDef,courseDef);return p.shoot+bonus-distancePenalty-contactDef-courseDef-keeper}
+function shotScore(){const p=players[owner],goal={x:96,y:50},distancePenalty=Math.floor(dist(p,goal)/6),contactDef=shotContactDef(p),courseDef=shotCourseDef(p),keeper=enemies.find(e=>e.role==="keeper").def,bonus=finishBonus(contactDef,courseDef),pressPenalty=currentPressPenalty();return p.shoot+bonus-pressPenalty-distancePenalty-contactDef-courseDef-keeper}
 function updateShootButton(){shootBtn.classList.remove("shot-high","shot-mid");const chance=shotScore();if(chance>=4)shootBtn.classList.add("shot-high");else if(chance>=0)shootBtn.classList.add("shot-mid")}
 function shoot(){
- const p=players[owner],goal={x:96,y:50},randomBonus=rand(-2,2),distancePenalty=Math.floor(dist(p,goal)/6),contactDef=shotContactDef(p),courseDef=shotCourseDef(p),keeper=enemies.find(e=>e.role==="keeper").def,bonus=finishBonus(contactDef,courseDef),result=p.shoot+randomBonus+bonus-distancePenalty-contactDef-courseDef-keeper;turn++;
- if(result>=0){score++;attackLog.push(`${p.n} シュート成功`);showJudge("SHOT SUCCESS","ゴール",3500);msg.textContent=`ゴール！ ${p.n}：S${p.shoot}+乱数${randomBonus}+決定機${bonus}-距離${distancePenalty}-接触DF${contactDef}-コースDF${courseDef}-GK${keeper} = ${result}`;showAttackLog("ゴールまでの流れ");resetAttackOnly()}
- else{attackLog.push(`${p.n} シュート失敗`);showJudge("SHOT FAILED","シュート失敗",3200);msg.textContent=`失敗。${p.n}：S${p.shoot}+乱数${randomBonus}+決定機${bonus}-距離${distancePenalty}-接触DF${contactDef}-コースDF${courseDef}-GK${keeper} = ${result}`;counterAttack();resetAttackOnly()}
+ const p=players[owner],goal={x:96,y:50},randomBonus=rand(-2,2),pressPenalty=currentPressPenalty(),distancePenalty=Math.floor(dist(p,goal)/6),contactDef=shotContactDef(p),courseDef=shotCourseDef(p),keeper=enemies.find(e=>e.role==="keeper").def,bonus=finishBonus(contactDef,courseDef),result=p.shoot+randomBonus+bonus-pressPenalty-distancePenalty-contactDef-courseDef-keeper;turn++;
+ if(result>=0){score++;attackLog.push(`${p.n} シュート成功`);showJudge("SHOT SUCCESS","ゴール",3500);msg.textContent=`ゴール！ ${p.n}：S${p.shoot}+乱数${randomBonus}+決定機${bonus}-圧力${pressPenalty}-距離${distancePenalty}-接触DF${contactDef}-コースDF${courseDef}-GK${keeper} = ${result}`;showAttackLog("ゴールまでの流れ");resetAttackOnly()}
+ else{attackLog.push(`${p.n} シュート失敗`);showJudge("SHOT FAILED","シュート失敗",3200);msg.textContent=`失敗。${p.n}：S${p.shoot}+乱数${randomBonus}+決定機${bonus}-圧力${pressPenalty}-距離${distancePenalty}-接触DF${contactDef}-コースDF${courseDef}-GK${keeper} = ${result}`;counterAttack();resetAttackOnly()}
  draw();
 }
 function counterAttack(){const enemyPower=rand(10,22)+Math.floor(enemies.reduce((s,e)=>s+e.def,0)/9),ourDefense=rand(11,23)+Math.floor(players.reduce((s,p)=>s+p.one+p.spd,0)/17);if(enemyPower>ourDefense){showJudge("COUNTER GOAL","カウンター失点",3500);msg.textContent+=` / カウンター失点：敵${enemyPower} ＞ 味方守備${ourDefense}`}else{showJudge("COUNTER STOP","カウンター阻止",2800);msg.textContent+=` / カウンター阻止：敵${enemyPower} ≤ 味方守備${ourDefense}`}showAttackLog("今回の攻撃")}
@@ -218,10 +251,48 @@ function ballDistanceWeight(target){
 }
 function markTargetPosition(target,kind){
  const ball=players[owner];
- const goalSide=goalSidePosition(target,kind==="E"?.54:.58);
- const passLane=lineBlockPosition(ball,target,.55);
- const watch=ballDistanceWeight(target);
+ const goalSide=goalSidePosition(target,kind==="E"?.56:.58);
+ const passLane=lineBlockPosition(ball,target,.52);
+ let watch=ballDistanceWeight(target);
+
+ // Eはボールが遠いほどかなり見る。近い時はラストパスの線を切る。
+ if(kind==="E" && dist(ball,target)>=28)watch=.92;
+
+ // D担当は、サイド保持時にはゴール側よりC/B→Dラインを優先する。
+ if(kind==="D" && (ball.role==="右サイド"||ball.role==="左サイド"))watch=.18;
+
  return {x:goalSide.x*watch+passLane.x*(1-watch),y:goalSide.y*watch+passLane.y*(1-watch)};
+}
+function nearestEnemyByRole(role){
+ let best=null,bestD=999;
+ enemies.forEach(e=>{if(e.role!==role)return;const d=dist(e,players[owner]);if(d<bestD){best=e;bestD=d}});
+ return best;
+}
+function forceOffballFollow(movedPlayer){
+ if(!movedPlayer)return;
+ const ball=players[owner];
+
+ // フィニッシャー単独のオフボールで簡単に完全フリーを作らせない
+ if(movedPlayer.role==="フィニッシャー"){
+  const marker=enemies.find(e=>e.role==="mark");
+  if(marker){
+   const farBall=dist(ball,movedPlayer)>=24;
+   const target=markTargetPosition(movedPlayer,"E");
+   const react=farBall?.82:.58;
+   marker.x+= (target.x-marker.x)*react;
+   marker.y+= (target.y-marker.y)*react;
+  }
+ }
+
+ // サイド保持者に対してはPRESSが即時に詰める
+ if(movedPlayer===ball || ball.role==="右サイド" || ball.role==="左サイド"){
+  const press=enemies.find(e=>e.role==="press");
+  if(press){
+   const target=pressTargetPosition(ball,.90);
+   press.x+=(target.x-press.x)*.60;
+   press.y+=(target.y-press.y)*.60;
+  }
+ }
 }
 function pressTargetPosition(attacker,aggression=.78){
  const ball=players[owner];
@@ -230,7 +301,11 @@ function pressTargetPosition(attacker,aggression=.78){
  return blendPos(goalCut,ballLane,1-aggression);
 }
 function holderPressureBonus(){
- return Math.min(10,holdTurn*2);
+ return Math.min(12,holdTurn*3);
+}
+function currentPressPenalty(){
+ // 保持プレス中は技術値が落ちる
+ return Math.min(7,Math.floor(holderPressureBonus()*.55));
 }
 
 function pressureCheck(){
@@ -238,24 +313,24 @@ function pressureCheck(){
  const contact=marks(holder);
  const pressure=holderPressureBonus();
 
- if(!contact.length && pressure<6)return false;
+ if(!contact.length && pressure<5)return false;
 
  const nearbyDef=contact.reduce((s,e)=>s+e.def,0);
- const depthPenalty=holder.x>55?Math.floor(holder.x/22):0;
- const attack=holder.one+rand(0,2);
+ const depthPenalty=holder.x>50?Math.floor(holder.x/20):0;
+ const attack=holder.one+rand(0,2)-currentPressPenalty();
  const defense=nearbyDef+depthPenalty+pressure;
 
- if(defense>attack+4){
+ if(defense>attack+3){
   attackLog.push(`${holder.n} 保持しすぎてロスト`);
   showJudge("PRESS LOST","保持時間で奪われた",3200);
   msg.textContent=`保持プレス。${holder.n}保持${attack} ＜ 守備${defense}。ボールを止めたまま味方を動かしすぎると危険。`;
   counterAttack();
   resetAttackOnly();
   return true;
- }else if(pressure>=6){
+ }else if(pressure>=5){
   attackLog.push(`${holder.n} 保持プレスを受ける`);
   showJudge("PRESSURE","寄せられている",1800);
-  msg.textContent=`保持プレス上昇中。${holder.n}保持${attack} / 守備圧${defense}`;
+  msg.textContent=`保持プレス上昇中。${holder.n}保持${attack} / 守備圧${defense}。以後のパス・突破・シュートが弱くなる。`;
   return false;
  }
 
@@ -298,63 +373,67 @@ function defenseMove(mode="ball",movedPlayer=null){
 
   let tx=e.homeX,ty=e.homeY,react=.22;
 
-  // PRESS：ボール保持者へ詰める。保持が長いほど強く詰める。
+  // PRESS：ボール保持者へ詰める。特にC/B保持時は野放しにしない。
   if(e.role==="press"){
-   const cut=pressTargetPosition(ball,.82);
+   const cut=pressTargetPosition(ball,.90);
    tx=cut.x;ty=cut.y;
-   react=mode==="ball"?.50:(mode==="pass"?.38:.34);
-   react+=Math.min(.14,pressureBoost*.01);
+   react=mode==="ball"?.58:(mode==="pass"?.48:.42);
+   if(ball.role==="右サイド"||ball.role==="左サイド")react+=.10;
+   react+=Math.min(.18,pressureBoost*.012);
   }
 
-  // COVER：D担当。Dが危険ならDへのパスレーンを切る。
-  // C/Bがボール保持なら、C/B→Dの間に入りやすくする。
+  // COVER：D担当。Dの近くではなく、C/B→Dの線を優先して消す。
   if(e.role==="cover"){
-   if(dPlayer && dPlayer.x>48){
+   if(dPlayer && dPlayer.x>44){
     let pos=markTargetPosition(dPlayer,"D");
-    if(ball.role==="右サイド" || ball.role==="左サイド"){
-     const lane=lineBlockPosition(ball,dPlayer,.55);
-     pos=blendPos(pos,lane,.45);
-    }
-    tx=pos.x;ty=pos.y;
-    react=mode==="offball"?.34:(mode==="pass"?.34:.42);
-   }else{
-    tx=e.homeX;ty=e.homeY;
-    react=mode==="offball"?.18:.22;
-   }
-  }
 
-  // MARK：E担当。ボールが遠いほどEを見る。近い時はパスレーンを切る。
-  if(e.role==="mark"){
-   if(ePlayer && ePlayer.x>50){
-    const pos=markTargetPosition(ePlayer,"E");
-    tx=pos.x;ty=pos.y;
-    if(ePlayer.x>70){
-     react=mode==="offball"?.50:(mode==="pass"?.42:.46);
+    if(ball.role==="右サイド" || ball.role==="左サイド"){
+     const lane=lineBlockPosition(ball,dPlayer,.50);
+     const pressLine=lineBlockPosition(ball,dPlayer,.38);
+     pos=blendPos(lane,pressLine,.35);
+     react=mode==="offball"?.54:(mode==="pass"?.56:.62);
     }else{
-     react=mode==="offball"?.38:(mode==="pass"?.34:.38);
+     react=mode==="offball"?.40:(mode==="pass"?.38:.46);
     }
+
+    tx=pos.x;ty=pos.y;
    }else{
     tx=e.homeX;ty=e.homeY;
     react=mode==="offball"?.20:.24;
    }
   }
 
-  // SW：カバー。ゴール前に吸われすぎず、中間管理。
-  if(e.role==="sw"){
-   let target=dPlayer;
-   if(ePlayer && ePlayer.x>68)target=ePlayer;
-   if(ball.x>65)target=ball;
-
-   if(target){
-    const goalCut=goalSidePosition(target,.48);
-    const central={x:72,y:50};
-    const pos=blendPos(goalCut,central,.35);
+  // MARK：E担当。ボールが遠いほどEを強く追従。近い時はD/C→Eの線を切る。
+  if(e.role==="mark"){
+   if(ePlayer && ePlayer.x>48){
+    const pos=markTargetPosition(ePlayer,"E");
     tx=pos.x;ty=pos.y;
+    const farBall=dist(ball,ePlayer)>=24;
+    if(ePlayer.x>70){
+     react=mode==="offball"?(farBall?.70:.54):(mode==="pass"?.48:.50);
+    }else{
+     react=mode==="offball"?(farBall?.58:.44):(mode==="pass"?.40:.42);
+    }
    }else{
     tx=e.homeX;ty=e.homeY;
+    react=mode==="offball"?.22:.26;
    }
+  }
 
-   react=mode==="offball"?.20:(mode==="pass"?.24:.30);
+  // SW：最終カバー。ゴール前に吸われすぎず、D/Eの裏を管理。
+  if(e.role==="sw"){
+   let pos={x:74,y:50};
+   if(dPlayer&&ePlayer){
+    const mid={x:(dPlayer.x+ePlayer.x)/2,y:(dPlayer.y+ePlayer.y)/2};
+    const central={x:76,y:50};
+    pos=blendPos(mid,central,.45);
+   }
+   if(ball.x>65){
+    const cutBall=goalSidePosition(ball,.60);
+    pos=blendPos(pos,cutBall,.35);
+   }
+   tx=pos.x;ty=pos.y;
+   react=mode==="offball"?.24:(mode==="pass"?.28:.34);
   }
 
   e.x+=(tx-e.x)*react;
@@ -362,6 +441,8 @@ function defenseMove(mode="ball",movedPlayer=null){
   e.x=clamp(e.x,8,88);
   e.y=clamp(e.y,8,92);
  });
+
+ forceOffballFollow(movedPlayer);
 }
 
 function showJudge(main,sub,duration=1600){judge.innerHTML=`${main}<br><small>${sub}</small>`;judge.style.display="block";clearTimeout(showJudge.timer);showJudge.timer=setTimeout(()=>{judge.style.display="none"},duration)}
@@ -394,7 +475,7 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v12: 担当DF距離制御 / 保持プレス蓄積 / パスレーン遮断強化`;
+ status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v13: プレス能力低下 / E単独移動対策 / C-D遮断強化`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def}</div>`;
  updateShootButton();
 }
