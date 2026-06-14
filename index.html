@@ -38,7 +38,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v13 守備圧・追従強化</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v14 担当DF責任制</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -170,7 +170,7 @@ function moveDir(dx,dy){
   const contact=marks(p);
   if(contact.length){
    const pressPenalty=currentPressPenalty(),attack=p.one+rand(0,2)-pressPenalty,advancePenalty=Math.floor(p.x/25),defense=contact.reduce((s,e)=>s+e.def,0)+advancePenalty;
-   if(attack>defense){attackLog.push(`${p.n} 1on1突破`);showJudge("1on1 WIN","突破成功",2000);msg.textContent=`${p.n}突破。1on1 ${attack} ＞ 守備${defense}`;supportMoveAfterDribble();defenseMove("ball")}
+   if(attack>defense){attackLog.push(`${p.n} 引き付け成功`);showJudge("1on1 WIN","引き付け成功",2000);msg.textContent=`${p.n}がDFを引き付けた。1on1 ${attack} ＞ 守備${defense}`;supportMoveAfterDribble();defenseMove("ball")}
    else{p.x=oldX;p.y=oldY;attackLog.push(`${p.n} 1on1失敗`);showJudge("1on1 LOSE","突破失敗",2600);msg.textContent=`止められた。1on1 ${attack} ＜ 守備${defense}`;counterAttack();resetAttackOnly()}
   }else{attackLog.push(`${p.n} ドリブル`);showJudge("DRIBBLE","移動",1400);msg.textContent=`${p.n}がV${p.spd}でドリブル。`;supportMoveAfterDribble();defenseMove("ball")}
  }else{
@@ -339,29 +339,156 @@ function pressureCheck(){
 
 function showAttackLog(title){logBox.innerHTML=`<b>${title}</b><br>`+(attackLog.length?attackLog.map((x,i)=>`${i+1}. ${x}`).join("<br>"):"記録なし")}
 function goalSidePosition(attacker,ratio=.62){const goal={x:96,y:50};return{x:attacker.x*ratio+goal.x*(1-ratio),y:attacker.y*ratio+goal.y*(1-ratio)}}
-function threatScore(p,i){
- if(i===owner)return 999;
- let s=0;
- if(p.x>48)s+=p.x-48;
- if(p.role==="ミドル")s+=14;
- if(p.role==="フィニッシャー")s+=18;
- if(p.x>62)s+=16;
- if(Math.abs(p.y-50)<24)s+=10;
- return s;
-}
-function getThreats(){
- return players.map((p,i)=>({p,i,score:threatScore(p,i)})).filter(t=>t.i!==owner&&t.score>10).sort((a,b)=>b.score-a.score);
+
+function goalPoint(){return {x:96,y:50}}
+
+function isGoalSide(defender,attacker){
+ const goal=goalPoint();
+ const gx=goal.x-attacker.x,gy=goal.y-attacker.y;
+ const dx=defender.x-attacker.x,dy=defender.y-attacker.y;
+ return gx*dx+gy*dy>-2;
 }
 
-function delayedTarget(current,last,mode){
- if(mode==="offball" && last)return last;
- return current;
+function threatScore(p,i){
+ if(i===owner)return 999;
+
+ const goal=goalPoint();
+ const goalD=dist(p,goal);
+ let s=0;
+
+ // ゴール距離
+ s+=Math.max(0,90-goalD)*0.55;
+
+ // シュート力
+ s+=p.shoot*0.9;
+
+ // 現在位置
+ if(p.x>52)s+=(p.x-52)*0.8;
+ if(p.x>68)s+=12;
+ if(Math.abs(p.y-50)<24)s+=8;
+
+ // 役割補正。ただし役割だけで過剰反応しすぎない
+ if(p.role==="フィニッシャー")s+=7;
+ if(p.role==="ミドル")s+=5;
+
+ return s;
+}
+
+function getThreats(){
+ return players
+  .map((p,i)=>({p,i,score:threatScore(p,i)}))
+  .filter(t=>t.i!==owner)
+  .sort((a,b)=>b.score-a.score);
+}
+
+function nonKeeperDefs(){
+ return enemies.filter(e=>e.role!=="keeper");
+}
+
+function nearestEligibleDef(target,available){
+ const goalSide=available.filter(e=>isGoalSide(e,target));
+ const pool=goalSide.length?goalSide:available;
+ return pool
+  .map(e=>({e,score:dist(e,target)+(isGoalSide(e,target)?0:18)}))
+  .sort((a,b)=>a.score-b.score)[0]?.e || null;
+}
+
+function assignDefenders(){
+ const defs=nonKeeperDefs();
+ const used=new Set();
+ const assignments=[];
+
+ const ball=players[owner];
+
+ // ① ボール保持者：守備可能位置にいる最寄りDFが担当
+ const holderDef=nearestEligibleDef(ball,defs);
+ if(holderDef){
+  assignments.push({def:holderDef,target:ball,type:"holder"});
+  used.add(holderDef.name);
+ }
+
+ // ② オフボール：危険度順に担当を割り当てる
+ // ただしカバーDFを1枚残す
+ const threats=getThreats();
+ for(const th of threats){
+  const remaining=defs.filter(e=>!used.has(e.name));
+  if(remaining.length<=1)break;
+  if(th.score<32)continue;
+
+  const d=nearestEligibleDef(th.p,remaining);
+  if(!d)continue;
+
+  assignments.push({def:d,target:th.p,type:"mark",threat:th.score});
+  used.add(d.name);
+ }
+
+ const cover=defs.find(e=>!used.has(e.name)) || null;
+ const coverTarget=threats[0]?.p || ball;
+ return {assignments,cover,coverTarget};
+}
+
+function getAssignmentFor(def,info){
+ return info.assignments.find(a=>a.def===def) || null;
+}
+
+function laneBlockPosition(from,to,ratio=.52){
+ return {x:from.x*(1-ratio)+to.x*ratio,y:from.y*(1-ratio)+to.y*ratio};
+}
+
+function blendPos(a,b,rate){
+ return {x:a.x*(1-rate)+b.x*rate,y:a.y*(1-rate)+b.y*rate};
+}
+
+function pressTargetPosition(attacker,aggression=.86){
+ const goalCut=goalSidePosition(attacker,.76);
+ const direct={x:attacker.x+2,y:attacker.y};
+ return blendPos(goalCut,direct,1-aggression);
+}
+
+function markTargetPositionV14(target){
+ const ball=players[owner];
+ const threat=threatScore(target,players.indexOf(target));
+ const passLane=laneBlockPosition(ball,target,.52);
+ const goalSide=goalSidePosition(target, threat>62?.62:.70);
+
+ // オフボール時は「保持者→DF→担当選手」の線を優先。
+ // 危険度が高いほど担当選手へ詰める。
+ const closeRate=clamp((threat-38)/45,0.15,0.62);
+ return blendPos(passLane,goalSide,closeRate);
+}
+
+function coverTargetPosition(target,assignedDef){
+ const goalSide=goalSidePosition(target,.45);
+ const central={x:75,y:50};
+
+ let pos=blendPos(goalSide,central,.35);
+
+ // 担当DFが突破されそうなら少し早めに支援
+ if(assignedDef){
+  const far=dist(assignedDef,target)>11;
+  const notGoalSide=!isGoalSide(assignedDef,target);
+  if(far||notGoalSide){
+   const urgent=goalSidePosition(target,.58);
+   pos=blendPos(pos,urgent,.45);
+  }
+ }
+
+ return pos;
+}
+
+function assignedDefForTarget(target,info){
+ const a=info.assignments.find(x=>x.target===target);
+ return a?.def || null;
+}
+
+function forceOffballFollow(movedPlayer){
+ // v14では担当DF責任制の中で追従するため、個別の強制追従は使わない
+ return;
 }
 
 function defenseMove(mode="ball",movedPlayer=null){
+ const info=assignDefenders();
  const ball=players[owner];
- const dPlayer=players.find(p=>p.role==="ミドル");
- const ePlayer=players.find(p=>p.role==="フィニッシャー");
  const pressureBoost=holderPressureBonus();
 
  enemies.forEach(e=>{
@@ -372,68 +499,42 @@ function defenseMove(mode="ball",movedPlayer=null){
   }
 
   let tx=e.homeX,ty=e.homeY,react=.22;
+  const asg=getAssignmentFor(e,info);
 
-  // PRESS：ボール保持者へ詰める。特にC/B保持時は野放しにしない。
-  if(e.role==="press"){
-   const cut=pressTargetPosition(ball,.90);
-   tx=cut.x;ty=cut.y;
-   react=mode==="ball"?.58:(mode==="pass"?.48:.42);
-   if(ball.role==="右サイド"||ball.role==="左サイド")react+=.10;
-   react+=Math.min(.18,pressureBoost*.012);
-  }
+  if(asg){
+   const target=asg.target;
 
-  // COVER：D担当。Dの近くではなく、C/B→Dの線を優先して消す。
-  if(e.role==="cover"){
-   if(dPlayer && dPlayer.x>44){
-    let pos=markTargetPosition(dPlayer,"D");
-
-    if(ball.role==="右サイド" || ball.role==="左サイド"){
-     const lane=lineBlockPosition(ball,dPlayer,.50);
-     const pressLine=lineBlockPosition(ball,dPlayer,.38);
-     pos=blendPos(lane,pressLine,.35);
-     react=mode==="offball"?.54:(mode==="pass"?.56:.62);
-    }else{
-     react=mode==="offball"?.40:(mode==="pass"?.38:.46);
-    }
-
+   if(asg.type==="holder"){
+    // 担当OFが保持している時は担当DFがプレス
+    const pos=pressTargetPosition(target,.90);
     tx=pos.x;ty=pos.y;
+    react=mode==="ball"?.62:(mode==="pass"?.54:.48);
+    react+=Math.min(.18,pressureBoost*.012);
    }else{
-    tx=e.homeX;ty=e.homeY;
-    react=mode==="offball"?.20:.24;
-   }
-  }
-
-  // MARK：E担当。ボールが遠いほどEを強く追従。近い時はD/C→Eの線を切る。
-  if(e.role==="mark"){
-   if(ePlayer && ePlayer.x>48){
-    const pos=markTargetPosition(ePlayer,"E");
+    // 担当OFがオフボールなら保持者→担当OFのパスレーンを切る
+    const pos=markTargetPositionV14(target);
     tx=pos.x;ty=pos.y;
-    const farBall=dist(ball,ePlayer)>=24;
-    if(ePlayer.x>70){
-     react=mode==="offball"?(farBall?.70:.54):(mode==="pass"?.48:.50);
-    }else{
-     react=mode==="offball"?(farBall?.58:.44):(mode==="pass"?.40:.42);
-    }
-   }else{
-    tx=e.homeX;ty=e.homeY;
-    react=mode==="offball"?.22:.26;
-   }
-  }
 
-  // SW：最終カバー。ゴール前に吸われすぎず、D/Eの裏を管理。
-  if(e.role==="sw"){
-   let pos={x:74,y:50};
-   if(dPlayer&&ePlayer){
-    const mid={x:(dPlayer.x+ePlayer.x)/2,y:(dPlayer.y+ePlayer.y)/2};
-    const central={x:76,y:50};
-    pos=blendPos(mid,central,.45);
+    const threat=threatScore(target,players.indexOf(target));
+    react=mode==="offball"?.46:(mode==="pass"?.42:.44);
+    if(threat>68)react+=.12;
+    if(dist(ball,target)>28)react+=.08; // ボールが遠いほど担当を見る
    }
-   if(ball.x>65){
-    const cutBall=goalSidePosition(ball,.60);
-    pos=blendPos(pos,cutBall,.35);
-   }
+  }else if(info.cover===e){
+   // カバーDF：固定の誰かではなく、危険度とゴール距離で支援対象を決める
+   const target=info.coverTarget;
+   const assigned=assignedDefForTarget(target,info);
+   const pos=coverTargetPosition(target,assigned);
    tx=pos.x;ty=pos.y;
-   react=mode==="offball"?.24:(mode==="pass"?.28:.34);
+
+   const threat=threatScore(target,players.indexOf(target));
+   react=mode==="offball"?.26:(mode==="pass"?.30:.34);
+   if(threat>70)react+=.10;
+  }else{
+   // 余りDFはホームに戻りすぎず中央管理
+   const central={x:e.homeX,y:e.homeY};
+   tx=central.x;ty=central.y;
+   react=.18;
   }
 
   e.x+=(tx-e.x)*react;
@@ -441,9 +542,8 @@ function defenseMove(mode="ball",movedPlayer=null){
   e.x=clamp(e.x,8,88);
   e.y=clamp(e.y,8,92);
  });
-
- forceOffballFollow(movedPlayer);
 }
+
 
 function showJudge(main,sub,duration=1600){judge.innerHTML=`${main}<br><small>${sub}</small>`;judge.style.display="block";clearTimeout(showJudge.timer);showJudge.timer=setTimeout(()=>{judge.style.display="none"},duration)}
 function draw(){
@@ -475,7 +575,7 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v13: プレス能力低下 / E単独移動対策 / C-D遮断強化`;
+ status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v14: 担当DF責任制 / 危険度順マーク / カバーDF支援`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def}</div>`;
  updateShootButton();
 }
