@@ -19,6 +19,7 @@ h1{font-size:18px;margin:4px 0 8px}
 .enemy{width:28px;height:28px;background:#ef5350;color:white;z-index:2;font-size:12px}
 .circle{position:absolute;border-radius:50%;background:rgba(239,83,80,.13);border:2px solid rgba(255,120,120,.75);transform:translate(-50%,-50%)}
 .zone{position:absolute;border:1px dashed rgba(255,255,255,.18);top:0;height:100%;width:20%}
+.heat{position:absolute;pointer-events:none;z-index:1;opacity:.26}
 #lines{position:absolute;width:100%;height:100%}
 button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;cursor:pointer}
 #targetBox{display:flex;flex-wrap:nowrap;gap:6px;margin-top:12px;margin-bottom:18px;justify-content:center}
@@ -38,7 +39,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v14 担当DF責任制</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v15 守備慣性・射線強化</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -47,7 +48,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
     <button onclick="moveDir(-1,1)">↙</button><button onclick="moveDir(0,1)">↓</button><button onclick="moveDir(1,1)">↘</button>
   </div>
   <div class="actions">
-    <button onclick="resetMatch()">リセット</button><button onclick="rerollTeam()">能力再抽選</button><button onclick="saveTeam()">チーム保存</button><button onclick="loadTeam()">保存チーム</button>
+    <button onclick="resetMatch()">リセット</button><button onclick="rerollTeam()">能力再抽選</button><button onclick="saveTeam()">チーム保存</button><button onclick="loadTeam()">保存チーム</button><button onclick="toggleDangerMap()">危険マップ</button>
   </div>
   <div id="status"></div><div id="roster"></div><div id="msg"></div><div id="log"></div>
 </div>
@@ -57,6 +58,7 @@ let players=[],enemies=[],owner=0,selected=0,score=0,turn=1,attackLog=[];
 let holdTurn=0,holderId=0,eOffballStreak=0,pressLevel=0;
 let receivedTurn=0,lastReceiveWasPass=false;
 let lastCoverTarget=null,lastMarkTarget=null,lastSwTarget=null;
+let showDangerMap=false,defMemory={};
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
@@ -73,20 +75,20 @@ function makePlayer(b){return {...b,pass:b.pass+rand(-3,3),shoot:b.shoot+rand(-3
 function createTeam(){players=basePlayers.map(makePlayer)}
 function createEnemies(){
  enemies=[
-  // 1-2-1気味の初期配置
-  {name:"PRESS",x:43,y:50,homeX:43,homeY:50,r:7,def:rand(9,15),role:"press"},
-  {name:"COVER",x:58,y:38,homeX:58,homeY:38,r:8,def:rand(10,16),role:"cover"},
-  {name:"MARK",x:58,y:62,homeX:58,homeY:62,r:7,def:rand(9,16),role:"mark"},
-  {name:"SW",x:74,y:50,homeX:74,homeY:50,r:8,def:rand(10,17),role:"sw"},
-  {name:"GK",x:89,y:50,homeX:89,homeY:50,r:10,def:rand(13,20),role:"keeper"}
+  // 1-2-1気味の初期配置。V=守備移動速度
+  {name:"PRESS",x:43,y:50,homeX:43,homeY:50,r:7,def:rand(9,15),spd:rand(5,9),role:"press"},
+  {name:"COVER",x:58,y:38,homeX:58,homeY:38,r:8,def:rand(10,16),spd:rand(5,9),role:"cover"},
+  {name:"MARK",x:58,y:62,homeX:58,homeY:62,r:7,def:rand(9,16),spd:rand(5,9),role:"mark"},
+  {name:"SW",x:74,y:50,homeX:74,homeY:50,r:8,def:rand(10,17),spd:rand(5,9),role:"sw"},
+  {name:"GK",x:89,y:50,homeX:89,homeY:50,r:10,def:rand(13,20),spd:rand(4,7),role:"keeper"}
  ];
 }
 function resetPositions(){const xs=[12,30,31,58,78],ys=[50,28,72,45,50];players.forEach((p,i)=>{p.x=xs[i];p.y=ys[i]});enemies.forEach(e=>{e.x=e.homeX;e.y=e.homeY})}
-function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
+function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;defMemory={};msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
 function rerollTeam(){createTeam();createEnemies();resetMatch();showJudge("TEAM RESET","能力再抽選",1800)}
 function saveTeam(){localStorage.setItem("markCircleTeam",JSON.stringify({players,enemies}));showJudge("SAVE","チーム保存",1800);msg.textContent="現在のチーム能力を保存しました。"}
 function loadTeam(){const data=localStorage.getItem("markCircleTeam");if(!data){showJudge("NO DATA","保存なし",2000);msg.textContent="保存チームがありません。";return}const saved=JSON.parse(data);players=saved.players;enemies=saved.enemies;resetMatch();showJudge("LOAD","保存チーム",1800)}
-function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;}
+function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;defMemory={};}
 function marks(p){return enemies.filter(e=>e.role!=="keeper"&&dist(p,e)<e.r)}
 function lineDef(a,b){
  let total=0;
@@ -207,8 +209,23 @@ function shotContactDef(shooter){
  return total;
 }
 function shotCourseDef(shooter){
- const goal={x:96,y:50};let total=0;
- enemies.forEach(e=>{if(e.role==="keeper")return;const dx=goal.x-shooter.x,dy=goal.y-shooter.y,len=dx*dx+dy*dy;if(!len)return;const t=Math.max(0,Math.min(1,((e.x-shooter.x)*dx+(e.y-shooter.y)*dy)/len)),px=shooter.x+t*dx,py=shooter.y+t*dy,distanceFromLine=Math.hypot(px-e.x,py-e.y);if(t>.05&&t<.95&&distanceFromLine<e.r*.75)total+=Math.floor(e.def*.65)});
+ const goal={x:96,y:50};
+ let total=0,direct=0,half=0;
+
+ enemies.forEach(e=>{
+  if(e.role==="keeper")return;
+  const dx=goal.x-shooter.x,dy=goal.y-shooter.y,len=dx*dx+dy*dy;
+  if(!len)return;
+  const t=Math.max(0,Math.min(1,((e.x-shooter.x)*dx+(e.y-shooter.y)*dy)/len));
+  if(t<=.05||t>=.95)return;
+  const px=shooter.x+t*dx,py=shooter.y+t*dy;
+  const d=Math.hypot(px-e.x,py-e.y);
+
+  // v15: シュートコースDF強化。線上=-3、半身=-1。
+  if(d<e.r*.45){total+=3;direct++}
+  else if(d<e.r*.95){total+=1;half++}
+ });
+ if(direct>=2)total+=1;
  return total;
 }
 function finishBonus(contactDef,courseDef){
@@ -340,6 +357,7 @@ function pressureCheck(){
 function showAttackLog(title){logBox.innerHTML=`<b>${title}</b><br>`+(attackLog.length?attackLog.map((x,i)=>`${i+1}. ${x}`).join("<br>"):"記録なし")}
 function goalSidePosition(attacker,ratio=.62){const goal={x:96,y:50};return{x:attacker.x*ratio+goal.x*(1-ratio),y:attacker.y*ratio+goal.y*(1-ratio)}}
 
+
 function goalPoint(){return {x:96,y:50}}
 
 function isGoalSide(defender,attacker){
@@ -349,208 +367,151 @@ function isGoalSide(defender,attacker){
  return gx*dx+gy*dy>-2;
 }
 
+function positionDangerAt(x,y){
+ const goal=goalPoint();
+ const d=Math.hypot(goal.x-x,goal.y-y);
+ const central=Math.max(0,1-Math.abs(y-50)/42);
+ const depth=Math.max(0,(x-45)/45);
+ const near=Math.max(0,(55-d)/55);
+ return clamp(near*70+central*18+depth*16,0,100);
+}
+function positionDanger(p){return positionDangerAt(p.x,p.y)}
+
 function threatScore(p,i){
  if(i===owner)return 999;
-
- const goal=goalPoint();
- const goalD=dist(p,goal);
- let s=0;
-
- // ゴール距離
- s+=Math.max(0,90-goalD)*0.55;
-
- // シュート力
- s+=p.shoot*0.9;
-
- // 現在位置
- if(p.x>52)s+=(p.x-52)*0.8;
- if(p.x>68)s+=12;
- if(Math.abs(p.y-50)<24)s+=8;
-
- // 役割補正。ただし役割だけで過剰反応しすぎない
- if(p.role==="フィニッシャー")s+=7;
- if(p.role==="ミドル")s+=5;
-
- return s;
+ // v15: 守備は選手能力を読まない。危険度は位置のみ。
+ return positionDanger(p);
 }
 
 function getThreats(){
- return players
-  .map((p,i)=>({p,i,score:threatScore(p,i)}))
-  .filter(t=>t.i!==owner)
-  .sort((a,b)=>b.score-a.score);
+ return players.map((p,i)=>({p,i,score:threatScore(p,i)})).filter(t=>t.i!==owner).sort((a,b)=>b.score-a.score);
 }
-
-function nonKeeperDefs(){
- return enemies.filter(e=>e.role!=="keeper");
-}
+function nonKeeperDefs(){return enemies.filter(e=>e.role!=="keeper")}
 
 function nearestEligibleDef(target,available){
  const goalSide=available.filter(e=>isGoalSide(e,target));
  const pool=goalSide.length?goalSide:available;
- return pool
-  .map(e=>({e,score:dist(e,target)+(isGoalSide(e,target)?0:18)}))
-  .sort((a,b)=>a.score-b.score)[0]?.e || null;
+ return pool.map(e=>({e,score:dist(e,target)+(isGoalSide(e,target)?0:18)})).sort((a,b)=>a.score-b.score)[0]?.e || null;
 }
 
 function assignDefenders(){
- const defs=nonKeeperDefs();
- const used=new Set();
- const assignments=[];
-
- const ball=players[owner];
-
- // ① ボール保持者：守備可能位置にいる最寄りDFが担当
+ const defs=nonKeeperDefs(),used=new Set(),assignments=[],ball=players[owner];
  const holderDef=nearestEligibleDef(ball,defs);
- if(holderDef){
-  assignments.push({def:holderDef,target:ball,type:"holder"});
-  used.add(holderDef.name);
- }
-
- // ② オフボール：危険度順に担当を割り当てる
- // ただしカバーDFを1枚残す
+ if(holderDef){assignments.push({def:holderDef,target:ball,targetIndex:owner,type:"holder",key:`holder-${owner}`});used.add(holderDef.name)}
  const threats=getThreats();
  for(const th of threats){
   const remaining=defs.filter(e=>!used.has(e.name));
   if(remaining.length<=1)break;
-  if(th.score<32)continue;
-
+  if(th.score<30)continue;
   const d=nearestEligibleDef(th.p,remaining);
   if(!d)continue;
-
-  assignments.push({def:d,target:th.p,type:"mark",threat:th.score});
+  assignments.push({def:d,target:th.p,targetIndex:th.i,type:"mark",threat:th.score,key:`mark-${th.i}`});
   used.add(d.name);
  }
-
- const cover=defs.find(e=>!used.has(e.name)) || null;
- const coverTarget=threats[0]?.p || ball;
- return {assignments,cover,coverTarget};
+ const cover=defs.find(e=>!used.has(e.name))||null;
+ return {assignments,cover,threats};
 }
+function getAssignmentFor(def,info){return info.assignments.find(a=>a.def===def)||null}
+function laneBlockPosition(from,to,ratio=.52){return {x:from.x*(1-ratio)+to.x*ratio,y:from.y*(1-ratio)+to.y*ratio}}
+function blendPos(a,b,rate){return {x:a.x*(1-rate)+b.x*rate,y:a.y*(1-rate)+b.y*rate}}
+function pressTargetPosition(attacker,aggression=.86){const goalCut=goalSidePosition(attacker,.76),direct={x:attacker.x+2,y:attacker.y};return blendPos(goalCut,direct,1-aggression)}
 
-function getAssignmentFor(def,info){
- return info.assignments.find(a=>a.def===def) || null;
-}
-
-function laneBlockPosition(from,to,ratio=.52){
- return {x:from.x*(1-ratio)+to.x*ratio,y:from.y*(1-ratio)+to.y*ratio};
-}
-
-function blendPos(a,b,rate){
- return {x:a.x*(1-rate)+b.x*rate,y:a.y*(1-rate)+b.y*rate};
-}
-
-function pressTargetPosition(attacker,aggression=.86){
- const goalCut=goalSidePosition(attacker,.76);
- const direct={x:attacker.x+2,y:attacker.y};
- return blendPos(goalCut,direct,1-aggression);
-}
-
-function markTargetPositionV14(target){
- const ball=players[owner];
- const threat=threatScore(target,players.indexOf(target));
- const passLane=laneBlockPosition(ball,target,.52);
- const goalSide=goalSidePosition(target, threat>62?.62:.70);
-
- // オフボール時は「保持者→DF→担当選手」の線を優先。
- // 危険度が高いほど担当選手へ詰める。
- const closeRate=clamp((threat-38)/45,0.15,0.62);
+function markTargetPositionV15(target){
+ const ball=players[owner],danger=positionDanger(target),passLane=laneBlockPosition(ball,target,.52),goalSide=goalSidePosition(target,danger>62?.62:.70);
+ const closeRate=clamp((danger-35)/45,0.15,0.62);
  return blendPos(passLane,goalSide,closeRate);
 }
 
-function coverTargetPosition(target,assignedDef){
- const goalSide=goalSidePosition(target,.45);
- const central={x:75,y:50};
-
- let pos=blendPos(goalSide,central,.35);
-
- // 担当DFが突破されそうなら少し早めに支援
- if(assignedDef){
-  const far=dist(assignedDef,target)>11;
-  const notGoalSide=!isGoalSide(assignedDef,target);
-  if(far||notGoalSide){
-   const urgent=goalSidePosition(target,.58);
-   pos=blendPos(pos,urgent,.45);
-  }
+function coverTargetPositionV15(info){
+ const threats=info.threats.filter(t=>t.score>25),goal=goalPoint();
+ if(threats.length>=2){
+  const a=threats[0].p,b=threats[1].p;
+  const mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+  return blendPos(mid,goal,.28);
  }
-
- return pos;
+ if(threats.length===1){return blendPos(goalSidePosition(threats[0].p,.48),{x:75,y:50},.30)}
+ return {x:74,y:50};
 }
 
-function assignedDefForTarget(target,info){
- const a=info.assignments.find(x=>x.target===target);
- return a?.def || null;
+function reactionRateFor(def,key,target){
+ const prev=defMemory[def.name];
+ const moved=prev?Math.hypot(target.x-prev.tx,target.y-prev.ty):999;
+ const danger=positionDangerAt(target.x,target.y);
+ const dangerChange=prev?Math.abs(danger-prev.danger):999;
+ let stage=2;
+ if(!prev||prev.key!==key){stage=0} // 対象変更：30%
+ else if(moved>5||dangerChange>12){stage=Math.min(prev.stage??2,1)} // 同対象の大変化：80%
+ else{stage=Math.min(2,(prev.stage??0)+1)} // 30→80→100
+ const rates=[.30,.80,1.00];
+ defMemory[def.name]={key,stage,tx:target.x,ty:target.y,danger};
+ return rates[stage];
 }
 
-function forceOffballFollow(movedPlayer){
- // v14では担当DF責任制の中で追従するため、個別の強制追従は使わない
- return;
+function moveDefenderToward(e,target,rate){
+ const dx=target.x-e.x,dy=target.y-e.y,d=Math.hypot(dx,dy);
+ if(!d)return;
+ const rnd=1+(rand(-1,1)*.05); // 小ランダム
+ const maxMove=(e.spd||6)*rate*rnd;
+ const step=Math.min(d,maxMove);
+ e.x+=dx/d*step;e.y+=dy/d*step;
+ e.x=clamp(e.x,8,88);e.y=clamp(e.y,8,92);
 }
+
+function forceOffballFollow(movedPlayer){return}
 
 function defenseMove(mode="ball",movedPlayer=null){
- const info=assignDefenders();
- const ball=players[owner];
- const pressureBoost=holderPressureBonus();
-
+ const info=assignDefenders(),ball=players[owner],pressureBoost=holderPressureBonus();
  enemies.forEach(e=>{
   if(e.role==="keeper"){
-   e.x=clamp(89+(ball.x-70)*.08,86,92);
-   e.y=clamp(50+(ball.y-50)*.30,34,66);
-   return;
+   const target={x:clamp(89+(ball.x-70)*.08,86,92),y:clamp(50+(ball.y-50)*.30,34,66)};
+   moveDefenderToward(e,target,.80);return;
   }
-
-  let tx=e.homeX,ty=e.homeY,react=.22;
+  let target={x:e.homeX,y:e.homeY},key=`home-${e.name}`;
   const asg=getAssignmentFor(e,info);
-
   if(asg){
-   const target=asg.target;
-
+   const p=asg.target;key=asg.key;
    if(asg.type==="holder"){
-    // 担当OFが保持している時は担当DFがプレス
-    const pos=pressTargetPosition(target,.90);
-    tx=pos.x;ty=pos.y;
-    react=mode==="ball"?.62:(mode==="pass"?.54:.48);
-    react+=Math.min(.18,pressureBoost*.012);
+    target=pressTargetPosition(p,.90);
+    if(pressureBoost>0)target=blendPos(target,p,Math.min(.25,pressureBoost*.015));
    }else{
-    // 担当OFがオフボールなら保持者→担当OFのパスレーンを切る
-    const pos=markTargetPositionV14(target);
-    tx=pos.x;ty=pos.y;
-
-    const threat=threatScore(target,players.indexOf(target));
-    react=mode==="offball"?.46:(mode==="pass"?.42:.44);
-    if(threat>68)react+=.12;
-    if(dist(ball,target)>28)react+=.08; // ボールが遠いほど担当を見る
+    target=markTargetPositionV15(p);
    }
   }else if(info.cover===e){
-   // カバーDF：固定の誰かではなく、危険度とゴール距離で支援対象を決める
-   const target=info.coverTarget;
-   const assigned=assignedDefForTarget(target,info);
-   const pos=coverTargetPosition(target,assigned);
-   tx=pos.x;ty=pos.y;
-
-   const threat=threatScore(target,players.indexOf(target));
-   react=mode==="offball"?.26:(mode==="pass"?.30:.34);
-   if(threat>70)react+=.10;
+   target=coverTargetPositionV15(info);
+   const top=info.threats[0],second=info.threats[1];
+   key=`cover-${top?.i??"none"}-${second?.i??"none"}`;
   }else{
-   // 余りDFはホームに戻りすぎず中央管理
-   const central={x:e.homeX,y:e.homeY};
-   tx=central.x;ty=central.y;
-   react=.18;
+   target={x:e.homeX,y:e.homeY};key=`home-${e.name}`;
   }
-
-  e.x+=(tx-e.x)*react;
-  e.y+=(ty-e.y)*react;
-  e.x=clamp(e.x,8,88);
-  e.y=clamp(e.y,8,92);
+  const rate=reactionRateFor(e,key,target);
+  moveDefenderToward(e,target,rate);
  });
 }
 
+function toggleDangerMap(){showDangerMap=!showDangerMap;draw()}
+function drawDangerMap(){
+ if(!showDangerMap)return;
+ const cols=16,rows=10;
+ for(let ix=0;ix<cols;ix++)for(let iy=0;iy<rows;iy++){
+  const x=(ix+.5)*100/cols,y=(iy+.5)*100/rows,danger=positionDangerAt(x,y);
+  if(danger<18)continue;
+  const div=document.createElement("div");div.className="heat";
+  div.style.left=(ix*100/cols)+"%";div.style.top=(iy*100/rows)+"%";div.style.width=(100/cols)+"%";div.style.height=(100/rows)+"%";
+  let bg="rgba(80,255,130,.35)";
+  if(danger>45)bg="rgba(255,228,92,.42)";
+  if(danger>65)bg="rgba(255,120,60,.48)";
+  if(danger>82)bg="rgba(255,60,60,.55)";
+  div.style.background=bg;field.appendChild(div);
+ }
+}
 
 function showJudge(main,sub,duration=1600){judge.innerHTML=`${main}<br><small>${sub}</small>`;judge.style.display="block";clearTimeout(showJudge.timer);showJudge.timer=setTimeout(()=>{judge.style.display="none"},duration)}
 function draw(){
- field.querySelectorAll(".player,.enemy,.circle,.zone").forEach(e=>e.remove());svg.innerHTML="";
+ field.querySelectorAll(".player,.enemy,.circle,.zone,.heat").forEach(e=>e.remove());svg.innerHTML="";
  targetBox.innerHTML=players.map((p,i)=>`<button class="${i===selected?'active':''}" onclick="selected=${i};draw()">選択 ${p.n}</button>`).join("");
  for(let i=0;i<5;i++){const z=document.createElement("div");z.className="zone";z.style.left=(i*20)+"%";field.appendChild(z)}
- enemies.forEach(e=>{const c=document.createElement("div");c.className="circle";c.style.left=e.x+"%";c.style.top=e.y+"%";c.style.width=e.r*2+"%";c.style.aspectRatio="1";field.appendChild(c);const b=document.createElement("div");b.className="enemy";b.style.left=e.x+"%";b.style.top=e.y+"%";b.textContent=e.role==="keeper"?"GK"+e.def:e.def;field.appendChild(b)});
+ drawDangerMap();
+ enemies.forEach(e=>{const c=document.createElement("div");c.className="circle";c.style.left=e.x+"%";c.style.top=e.y+"%";c.style.width=e.r*2+"%";c.style.aspectRatio="1";field.appendChild(c);const b=document.createElement("div");b.className="enemy";b.style.left=e.x+"%";b.style.top=e.y+"%";b.textContent=e.role==="keeper"?"GK"+e.def:e.def+"/V"+(e.spd||6);field.appendChild(b)});
  players.forEach((p,i)=>{if(i!==owner){const l=document.createElementNS("http://www.w3.org/2000/svg","line");l.setAttribute("x1",players[owner].x+"%");l.setAttribute("y1",players[owner].y+"%");l.setAttribute("x2",p.x+"%");l.setAttribute("y2",p.y+"%");l.setAttribute("stroke",passColor(players[owner],p));l.setAttribute("stroke-width","4");svg.appendChild(l)}});
  players.forEach((p,i)=>{
  if(i!==owner){
@@ -575,8 +536,8 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v14: 担当DF責任制 / 危険度順マーク / カバーDF支援`;
- roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def}</div>`;
+ status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v15: 反応遅延30→80→100 / DF速度V / 射線DF強化 / 危険マップ`;
+ roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  updateShootButton();
 }
 window.addEventListener("error",e=>{msg.textContent="エラー："+e.message});
