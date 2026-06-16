@@ -39,7 +39,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v15 守備慣性・射線強化</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v16 浮き危険度・距離閾値</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -536,12 +536,17 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v15: 反応遅延30→80→100 / DF速度V / 射線DF強化 / 危険マップ`;
+ status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v16: 浮き危険度 / カバーDF / 距離別成功閾値 / 決定機内訳`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  updateShootButton();
 }
 window.addEventListener("error",e=>{msg.textContent="エラー："+e.message});
 createTeam();createEnemies();resetMatch();
 </script>
+
+<!-- V16仕様メモ
+浮き危険度・カバーDF・距離別成功閾値・決定機距離制限・決定機内訳表示
+-->
+
 </body>
 </html>
