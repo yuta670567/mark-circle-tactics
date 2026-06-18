@@ -39,7 +39,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v17 守備接触・角度・可視化</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v18 マーク学習・奪取</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -58,7 +58,7 @@ let players=[],enemies=[],owner=0,selected=0,score=0,turn=1,attackLog=[];
 let holdTurn=0,holderId=0,eOffballStreak=0,pressLevel=0;
 let receivedTurn=0,lastReceiveWasPass=false;
 let lastCoverTarget=null,lastMarkTarget=null,lastSwTarget=null;
-let showDangerMap=false,defMemory={},dribbleStreak=0,lastHolderForDribble=null;
+let showDangerMap=false,defMemory={},dribbleStreak=0,lastHolderForDribble=null,markMemory={};
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
@@ -84,11 +84,11 @@ function createEnemies(){
  ];
 }
 function resetPositions(){const xs=[12,30,31,58,78],ys=[50,28,72,45,50];players.forEach((p,i)=>{p.x=xs[i];p.y=ys[i]});enemies.forEach(e=>{e.x=e.homeX;e.y=e.homeY})}
-function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;defMemory={};dribbleStreak=0;lastHolderForDribble=null;msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
+function resetMatch(){resetPositions();owner=0;selected=0;score=0;turn=1;attackLog=[];holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;receivedTurn=0;lastReceiveWasPass=false;lastCoverTarget=null;lastMarkTarget=null;lastSwTarget=null;defMemory={};markMemory={};dribbleStreak=0;lastHolderForDribble=null;msg.textContent="守備を動かして、空いたスペースを探そう。";logBox.innerHTML="";draw()}
 function rerollTeam(){createTeam();createEnemies();resetMatch();showJudge("TEAM RESET","能力再抽選",1800)}
 function saveTeam(){localStorage.setItem("markCircleTeam",JSON.stringify({players,enemies}));showJudge("SAVE","チーム保存",1800);msg.textContent="現在のチーム能力を保存しました。"}
 function loadTeam(){const data=localStorage.getItem("markCircleTeam");if(!data){showJudge("NO DATA","保存なし",2000);msg.textContent="保存チームがありません。";return}const saved=JSON.parse(data);players=saved.players;enemies=saved.enemies;resetMatch();showJudge("LOAD","保存チーム",1800)}
-function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;defMemory={};dribbleStreak=0;lastHolderForDribble=null;}
+function resetAttackOnly(){resetPositions();owner=0;selected=0;attackLog=[];receivedTurn=0;lastReceiveWasPass=false;holdTurn=0;holderId=0;eOffballStreak=0;pressLevel=0;defMemory={};markMemory={};dribbleStreak=0;lastHolderForDribble=null;}
 function marks(p){return enemies.filter(e=>e.role!=="keeper"&&dist(p,e)<e.r)}
 function lineDef(a,b){
  let total=0;
@@ -154,10 +154,31 @@ function passColor(from,to){
  return "#ff6b6b";
 }
 
-function passTo(i){if(i===owner){selected=i;draw();return}const from=players[owner],to=players[i],diff=passDifficulty(from,to),pressPenalty=currentPressPenalty(),attack=from.pass+rand(1,5)-pressPenalty,defense=diff.total,rate=passSuccessRate(defense),roll=rand(1,100),baseSuccess=attack>defense;turn++;dribbleStreak=0;lastHolderForDribble=null;if(baseSuccess&&roll<=rate){attackLog.push(`${from.n}→${to.n} パス成功`);owner=i;selected=i;holderId=i;holdTurn=0;eOffballStreak=0;receivedTurn=turn;lastReceiveWasPass=true;showJudge("PASS SUCCESS","パス成功",1800);msg.innerHTML=`${from.n}→${to.n} 成功。<br>P判定 ${attack} ＞ 守備${defense}<br>成功率${rate}% / ロール${roll}<br>圧力-${pressPenalty} / 受け後リスク${diff.receiveRisk}`;defenseMove("pass");pressureCheck()}else{attackLog.push(`${from.n}→${to.n} パスずれ`);showJudge("PASS MISS","パスがずれた",2200);msg.innerHTML=`パスがずれた。<br>P判定 ${attack} ${baseSuccess?">":"<"} 守備${defense}<br>成功率${rate}% / ロール${roll}<br>攻撃は継続するが、ボールは出し手に残る。`;defenseMove("pass")}draw();}
+
+function markKey(p,e){return `${p.n}_${Math.round(e.homeX||e.x)}_${Math.round(e.homeY||e.y)}_${e.def}`}
+function markCount(p,e){return markMemory[markKey(p,e)]||0}
+function markCoef(n){if(n<=1)return 1.1;if(n===2)return 1.3;if(n===3)return 1.5;if(n===4)return 1.8;return 2.0}
+function markDefDetail(p){
+ const base=contactDefDetail(p).list;
+ const list=base.map(x=>{const c=markCount(p,x.e)+1,coef=markCoef(c),eff=Math.floor(x.value*coef);return {e:x.e,base:x.value,c,coef,eff}});
+ const total=list.reduce((a,x)=>a+x.eff,0);
+ const parts=list.map(x=>`${x.e.def}/V${x.e.spd||6}:${x.base}×${x.coef.toFixed(1)}=${x.eff}(M${x.c})`).join(' + ')||'なし';
+ return {total,parts,list};
+}
+function addMarkLearning(p){contactDefDetail(p).list.forEach(x=>{const k=markKey(p,x.e);markMemory[k]=(markMemory[k]||0)+1})}
+function clearMarkLearning(p){Object.keys(markMemory).forEach(k=>{if(k.startsWith(p.n+'_'))delete markMemory[k]})}
+function strongestContact(p){const l=contactDefDetail(p).list;return l.length?l.sort((a,b)=>b.value-a.value)[0]:null}
+function supportMoveForBlockedPass(holderIndex){
+ const h=players[holderIndex];let best=null;
+ players.forEach((p,i)=>{if(i===holderIndex)return;const d=passDifficulty(h,p).total,rate=passSuccessRate(d),score=rate-dist(h,p)*.15;if(!best||score>best.score)best={p,i,rate,d,score}});
+ if(!best)return null;const q=best.p,dx=h.x-q.x,dy=h.y-q.y,len=Math.hypot(dx,dy)||1,step=1;
+ q.x=clamp(q.x+dx/len*step,6,84);q.y=clamp(q.y+dy/len*step,10,90);return best;
+}
+
+function passTo(i){if(i===owner){selected=i;draw();return}const from=players[owner],to=players[i],diff=passDifficulty(from,to),pressPenalty=currentPressPenalty(),attack=from.pass+rand(1,5)-pressPenalty,defense=diff.total,rate=passSuccessRate(defense),roll=rand(1,100),baseSuccess=attack>defense;turn++;dribbleStreak=0;lastHolderForDribble=null;if(baseSuccess&&roll<=rate){attackLog.push(`${from.n}→${to.n} パス成功`);clearMarkLearning(from);owner=i;selected=i;holderId=i;holdTurn=0;eOffballStreak=0;receivedTurn=turn;lastReceiveWasPass=true;showJudge("PASS SUCCESS","パス成功",1800);msg.innerHTML=`${from.n}→${to.n} 成功。<br>P判定 ${attack} ＞ 守備${defense}<br>成功率${rate}% / ロール${roll}<br>圧力-${pressPenalty} / 受け後リスク${diff.receiveRisk}`;defenseMove("pass");pressureCheck()}else{attackLog.push(`${from.n}→${to.n} パス出せず`);const sup=supportMoveForBlockedPass(owner);if(sup)attackLog.push(`${sup.p.n} サポート移動`);showJudge("PASS BLOCKED","パス出せず",2200);msg.innerHTML=`${from.n}→${to.n} パス出せず。<br>P判定 ${attack} ${baseSuccess?">":"<="} 守備${defense}<br>成功率${rate}% / ロール${roll}<br>${sup?`${sup.p.n} サポート移動（成功率${sup.rate}%）`:"サポートなし"}<br>守備側が体勢を整えた。`;defenseMove("pass")}draw();}
 
 
-function moveDir(dx,dy){const p=players[selected],len=Math.hypot(dx,dy);if(!len)return;const nx=dx/len,ny=dy/len,oldX=p.x,oldY=p.y,isOwnerMove=selected===owner;if(isOwnerMove){if(lastHolderForDribble===owner)dribbleStreak++;else{lastHolderForDribble=owner;dribbleStreak=1}}else{dribbleStreak=0;lastHolderForDribble=null}p.x=clamp(p.x+nx*p.spd,6,84);p.y=clamp(p.y+ny*p.spd,10,90);turn++;if(selected===owner){holdTurn=0;eOffballStreak=0;lastReceiveWasPass=false;const cd=contactDefDetail(p),coef=dribbleLearnCoef(),effectiveDef=Math.floor(cd.total*coef),attack=p.one;if(cd.total>0&&attack<=effectiveDef){p.x=oldX;p.y=oldY;attackLog.push(`${p.n} ドリブル失敗`);showJudge("DRIBBLE STOP","抜けなかった",2200);msg.innerHTML=`${p.n}は抜けなかった。<br>O${attack} ≤ 接触DF${cd.total} × 学習${coef.toFixed(1)} = ${effectiveDef}<br>接触内訳：${cd.parts}<br>移動なし・保持継続。`;defenseMove("ball")}else{attackLog.push(`${p.n} ドリブル`);showJudge("DRIBBLE","移動",1400);msg.innerHTML=`${p.n}がV${p.spd}でドリブル。<br>O${attack} / 接触DF${cd.total} × 学習${coef.toFixed(1)} = ${effectiveDef}<br>接触内訳：${cd.parts}`;supportMoveAfterDribble();defenseMove("ball")}}else{attackLog.push(`${p.n} オフボール移動`);showJudge("MOVE","味方移動",1400);msg.textContent=`${p.n}を動かした。危険選手には担当DFがついていく。`;if(p.role==="フィニッシャー")eOffballStreak++;else eOffballStreak=0;holdTurn++;defenseMove("offball",p);pressureCheck()}draw();}
+function moveDir(dx,dy){const p=players[selected],len=Math.hypot(dx,dy);if(!len)return;const nx=dx/len,ny=dy/len,oldX=p.x,oldY=p.y;p.x=clamp(p.x+nx*p.spd,6,84);p.y=clamp(p.y+ny*p.spd,10,90);turn++;if(selected===owner){holdTurn=0;eOffballStreak=0;lastReceiveWasPass=false;const cd=contactDefDetail(p),md=markDefDetail(p),attack=p.one,diff=md.total-attack;if(cd.total>0)addMarkLearning(p);if(cd.total>0&&attack<=md.total){p.x=oldX;p.y=oldY;if(diff>=3){const t=strongestContact(p);attackLog.push(`${p.n} ボール奪われた`);showJudge("BALL LOST","奪取",2600);msg.innerHTML=`${p.n}はボールを奪われた。<br>O${attack} ＜ 実効DF${md.total}（差${diff}）<br>マーク学習：${md.parts}<br>${t?`奪取DF：${t.e.def}/V${t.e.spd||6}`:""}`;defenseMove("ball");resetAttackOnly();draw();return}else{attackLog.push(`${p.n} ドリブル止められた`);showJudge("DRIBBLE STOP","止められた",2200);msg.innerHTML=`${p.n}はドリブルを止められた。<br>O${attack} ≤ 実効DF${md.total}<br>マーク学習：${md.parts}<br>移動なし・保持継続。`;defenseMove("ball")}}else{attackLog.push(`${p.n} ドリブル`);showJudge("DRIBBLE","移動",1400);msg.innerHTML=`${p.n}がV${p.spd}でドリブル。<br>O${attack} / 接触DF${cd.total} / 実効DF${md.total}<br>マーク学習：${md.parts}`;supportMoveAfterDribble();defenseMove("ball")}}else{attackLog.push(`${p.n} オフボール移動`);showJudge("MOVE","味方移動",1400);msg.textContent=`${p.n}を動かした。危険選手には担当DFがついていく。`;if(p.role==="フィニッシャー")eOffballStreak++;else eOffballStreak=0;holdTurn++;defenseMove("offball",p);pressureCheck()}draw();}
 
 
 function supportMoveAfterDribble(){
@@ -484,7 +505,7 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v17: 接触DF1.5 / ドリブル学習 / パス成功率 / 角度補正 / 詳細ログ`;
+ status.innerHTML=`得点：${score}　ターン：${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v18: マーク学習 / 止められた / 奪取 / パス出せずサポート`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  updateShootButton();
 }
