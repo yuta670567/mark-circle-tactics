@@ -583,7 +583,8 @@ function draw(){
 });
  status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v19: カバーリング守備 / 担当楕円 / 結果表示改善 / ターン18/254`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
- 
+
+  /*
  if(typeof lastDefRoles!=="undefined" && lastDefRoles.length){
   lastDefRoles.forEach(r=>{
    const b=document.createElement("div");
@@ -592,6 +593,7 @@ function draw(){
    field.appendChild(b);
   });
  }
+ */
  if(typeof showTacticalEllipse!=="undefined" && showTacticalEllipse){
   const h=players[owner],w=df1EllipseWidth(h),g=goalPoint();
   const el=document.createElement("div");
