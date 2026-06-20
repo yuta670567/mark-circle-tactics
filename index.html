@@ -44,11 +44,15 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 .defRole{position:absolute;transform:translate(-50%,-170%);font-size:10px;padding:2px 5px;border-radius:999px;background:rgba(0,0,0,.65);color:white;white-space:nowrap;z-index:8}
 .ellipseGuide{position:absolute;border:2px dashed rgba(80,180,255,.75);background:rgba(80,180,255,.07);border-radius:50%;pointer-events:none;z-index:1}
 
+
+#numDebug{margin-top:8px;background:rgba(255,255,255,.10);padding:8px;border-radius:10px;line-height:1.45;font-size:13px;min-height:18px;border:1px solid rgba(255,255,255,.18)}
+#numDebug b{color:#ffe45c}
+
 </style>
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v19 カバーリング守備・表示改善</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v20 数的不利守備</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -59,15 +63,15 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
   <div class="actions">
     <button onclick="resetMatch()">リセット</button><button onclick="rerollTeam()">能力再抽選</button><button onclick="saveTeam()">チーム保存</button><button onclick="loadTeam()">保存チーム</button><button onclick="toggleDangerMap()">危険マップ</button>
   </div>
-  <div id="status"></div><div id="roster"></div><div id="msg"></div><div id="log"></div>
+  <div id="status"></div><div id="roster"></div><div id="msg"></div><div id="log"></div><div id="numDebug"></div>
 </div>
 <script>
-const field=document.getElementById("field"),svg=document.getElementById("lines"),msg=document.getElementById("msg"),status=document.getElementById("status"),roster=document.getElementById("roster"),judge=document.getElementById("judge"),logBox=document.getElementById("log"),targetBox=document.getElementById("targetBox"),shootBtn=document.getElementById("shootBtn");
+const field=document.getElementById("field"),svg=document.getElementById("lines"),msg=document.getElementById("msg"),status=document.getElementById("status"),roster=document.getElementById("roster"),judge=document.getElementById("judge"),logBox=document.getElementById("log"),numDebug=document.getElementById("numDebug"),targetBox=document.getElementById("targetBox"),shootBtn=document.getElementById("shootBtn");
 let players=[],enemies=[],owner=0,selected=0,score=0,turn=1,attackLog=[];
 let holdTurn=0,holderId=0,eOffballStreak=0,pressLevel=0;
 let receivedTurn=0,lastReceiveWasPass=false;
 let lastCoverTarget=null,lastMarkTarget=null,lastSwTarget=null;
-let showDangerMap=false,showTacticalEllipse=false,defMemory={},dribbleStreak=0,lastHolderForDribble=null,markMemory={},attackTurn=0,lastDefRoles=[];
+let showDangerMap=false,showTacticalEllipse=false,defMemory={},dribbleStreak=0,lastHolderForDribble=null,markMemory={},attackTurn=0,lastDefRoles=[],lastNumState=null,numDisadvMode=false,numDisadvClearCount=0;
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min}
 function clamp(v,min,max){return Math.max(min,Math.min(max,v))}
 function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
@@ -470,7 +474,128 @@ function isDf1Responsible(df,holder){
  const allowed=df1EllipseWidth(holder);
  return Math.abs(df.y-holder.y)<=allowed;
 }
-function v19DefRoles(){
+
+function unitToGoalFrom(p){
+ const g=goalPoint();
+ return normVec(g.x-p.x,g.y-p.y);
+}
+function dangerEllipseCheck(pt){
+ const h=players[owner],g=goalPoint();
+ const vx=g.x-h.x,vy=g.y-h.y;
+ const L=Math.hypot(vx,vy)||1;
+ const ux=vx/L,uy=vy/L;
+ const px=pt.x-h.x,py=pt.y-h.y;
+ const along=px*ux+py*uy;
+ const perp=Math.abs(px*(-uy)+py*ux);
+ const a=L/2;
+ const b=Math.max(3,df1EllipseWidth(h));
+ const value=((along-a)*(along-a))/(a*a)+(perp*perp)/(b*b);
+ return along>=0 && along<=L && value<=1.0001;
+}
+function dangerEllipsePlayers(){
+ const off=players.map((p,i)=>({p,i})).filter(x=>dangerEllipseCheck(x.p));
+ const defs=enemies.filter(e=>e.role!=="keeper" && dangerEllipseCheck(e));
+ return {off,defs};
+}
+function goalSideOffensesInEllipse(){
+ const h=players[owner],g=goalPoint();
+ const ux=unitToGoalFrom(h).x,uy=unitToGoalFrom(h).y;
+ return players.map((p,i)=>({p,i}))
+  .filter(x=>i!==owner && dangerEllipseCheck(x.p) && ((x.p.x-h.x)*ux+(x.p.y-h.y)*uy)>=-0.01)
+  .sort((a,b)=>dist(g,a.p)-dist(g,b.p));
+}
+function numericalDisadvantageRaw(){
+ const d=dangerEllipsePlayers();
+ return {active:d.off.length>d.defs.length,off:d.off,defs:d.defs};
+}
+function pressTargetFor(holder,helper){
+ const g=goalPoint();
+ const ug=unitToGoalFrom(holder);
+ const perp={x:-ug.y,y:ug.x};
+ let side=1;
+ if(helper){
+  const candA={x:holder.x+perp.x*6,y:holder.y+perp.y*6};
+  const candB={x:holder.x-perp.x*6,y:holder.y-perp.y*6};
+  side=dist(candA,helper)<=dist(candB,helper)?1:-1;
+ }
+ // 誘導したい側の反対に立つ
+ return {
+  target:{x:clamp(holder.x-ug.x*4-perp.x*side*2.5,6,94),y:clamp(holder.y-ug.y*4-perp.y*side*2.5,8,92)},
+  direction:side===1?"右/下側へ誘導":"左/上側へ誘導"
+ };
+}
+function markGoalSideTarget(offense,markDist=5){
+ const g=goalPoint();
+ const v=normVec(g.x-offense.x,g.y-offense.y);
+ return {x:clamp(offense.x+v.x*markDist,6,94),y:clamp(offense.y+v.y*markDist,8,92)};
+}
+function fallbackSupportTarget(def,holder){
+ const near=nearestOffenseToHolder();
+ if(near){
+  const p=pointBetween(holder,near.p,.55);
+  return {x:clamp(p.x,6,94),y:clamp(p.y+(50-p.y)*.12,8,92)};
+ }
+ const ug=unitToGoalFrom(holder);
+ return {x:clamp(holder.x-ug.x*7,6,94),y:clamp(holder.y-ug.y*7+(50-holder.y)*.2,8,92)};
+}
+function numericalDisadvantageRoles(){
+ const raw=numericalDisadvantageRaw();
+ // 解除は1ターン維持
+ if(raw.active){numDisadvMode=true;numDisadvClearCount=0}
+ else if(numDisadvMode){
+  numDisadvClearCount++;
+  if(numDisadvClearCount>=2){numDisadvMode=false;numDisadvClearCount=0}
+ }
+ if(!numDisadvMode){
+  lastNumState={active:false,off:raw.off.length,defs:raw.defs.length,clear:numDisadvClearCount};
+  return null;
+ }
+ const holder=players[owner],g=goalPoint();
+ const defs=(raw.defs.length?raw.defs:enemies.filter(e=>e.role!=="keeper"))
+   .slice().sort((a,b)=>dist(a,holder)-dist(b,holder)).slice(0,3);
+ const goalSide=goalSideOffensesInEllipse();
+ const roles=[];
+ if(defs[0]){
+  const helper=defs[1]||null;
+  const pr=pressTargetFor(holder,helper);
+  roles.push({def:defs[0],role:"数不D1",target:pr.target,offense:holder.n,detail:"保持者プレス",direction:pr.direction});
+ }
+ if(defs[1]){
+  if(goalSide[0]) roles.push({def:defs[1],role:"数不D2",target:markGoalSideTarget(goalSide[0].p,5),offense:goalSide[0].p.n,detail:"ゴール寄り1位"});
+  else roles.push({def:defs[1],role:"数不D2",target:fallbackSupportTarget(defs[1],holder),offense:holder.n,detail:"フォロー"});
+ }
+ if(defs[2]){
+  if(goalSide[1]) roles.push({def:defs[2],role:"数不D3",target:markGoalSideTarget(goalSide[1].p,5),offense:goalSide[1].p.n,detail:"ゴール寄り2位"});
+  else roles.push({def:defs[2],role:"数不D3",target:fallbackSupportTarget(defs[2],holder),offense:holder.n,detail:"フォロー"});
+ }
+ lastNumState={
+  active:true,
+  off:raw.off.length,
+  defs:raw.defs.length,
+  label:`${raw.off.length}vs${raw.defs.length}`,
+  roles,
+  direction:roles[0]?roles[0].direction:"-",
+  clear:numDisadvClearCount
+ };
+ return roles;
+}
+function updateNumericalDebug(){
+ if(!numDebug)return;
+ if(!lastNumState||!lastNumState.active){
+  const d=lastNumState?`危険エリア：O${lastNumState.off} / D${lastNumState.defs}`:"";
+  numDebug.innerHTML=`<b>■ 数的不利守備</b><br>状態：なし<br>${d}`;
+  return;
+ }
+ const lines=lastNumState.roles.map((r,i)=>`${r.role} → ${r.offense}（${r.detail}）`).join("<br>");
+ numDebug.innerHTML=`<b>■ 数的不利守備</b><br>状態：${lastNumState.label}<br>危険エリア：O${lastNumState.off} / D${lastNumState.defs}<br>${lines}<br>誘導方向：${lastNumState.direction}<br>解除待ち：${lastNumState.clear?lastNumState.clear:"なし"}`;
+}
+
+function v20DefRoles(){
+ const numRoles=numericalDisadvantageRoles();
+ if(numRoles && numRoles.length){
+  lastDefRoles=numRoles;
+  return numRoles;
+ }
  const holder=players[owner],g=goalPoint();
  const defs=enemies.filter(e=>e.role!=="keeper");
  if(defs.length<4)return [];
@@ -510,6 +635,7 @@ function v19DefRoles(){
  lastDefRoles=roles;
  return roles;
 }
+
 function formatShotResultHtml(p,effectiveS,angleName,af,randomBonus,chanceDetail,contactDetail,courseDetail,distancePenalty,keeper,result,minNeed,success){
  const plusItems=[{name:`S${p.shoot}×角度${af.toFixed(2)}(${angleName})`,value:effectiveS},{name:"乱数",value:randomBonus},{name:"決定機",value:chanceDetail.bonus}].filter(x=>x.value>0);
  const minusItems=[{name:"乱数",value:randomBonus},{name:`接触DF（${contactDetail.parts}）`,value:-contactDetail.total},{name:`コースDF（${courseDetail.parts}）`,value:-courseDetail.total},{name:"距離",value:-distancePenalty},{name:"GK",value:-keeper}].filter(x=>x.value<0);
@@ -521,7 +647,7 @@ function formatShotResultHtml(p,effectiveS,angleName,af,randomBonus,chanceDetail
 }
 
 function defenseMove(reason="",movedPlayer=null){
- const roles=v19DefRoles();
+ const roles=v20DefRoles();
  if(roles.length){
   roles.forEach(r=>{
    const key=`${r.role}-${r.offense}`;
@@ -581,19 +707,9 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v19: カバーリング守備 / 担当楕円 / 結果表示改善 / ターン18/254`;
+ status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v20: 数的不利守備 / 通常カバーリング / 担当楕円 / 表示改善`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
-
-  /*
- if(typeof lastDefRoles!=="undefined" && lastDefRoles.length){
-  lastDefRoles.forEach(r=>{
-   const b=document.createElement("div");
-   b.className="defRole";b.style.left=r.def.x+"%";b.style.top=r.def.y+"%";
-   b.textContent=`${r.role}→${r.offense}`;
-   field.appendChild(b);
-  });
- }
- */
+ 
  if(typeof showTacticalEllipse!=="undefined" && showTacticalEllipse){
   const h=players[owner],w=df1EllipseWidth(h),g=goalPoint();
   const el=document.createElement("div");
@@ -603,6 +719,7 @@ function draw(){
   field.appendChild(el);
  }
 
+updateNumericalDebug();
 updateShootButton();
 }
 window.addEventListener("error",e=>{msg.textContent="エラー："+e.message});
@@ -619,6 +736,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<!-- V19 generated -->
+<!-- V20 generated: numerical disadvantage defense mode -->
 </body>
 </html>
