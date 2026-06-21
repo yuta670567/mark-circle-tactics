@@ -538,6 +538,64 @@ function fallbackSupportTarget(def,holder){
  const ug=unitToGoalFrom(holder);
  return {x:clamp(holder.x-ug.x*7,6,94),y:clamp(holder.y-ug.y*7+(50-holder.y)*.2,8,92)};
 }
+
+function makeNormalDefRoles(excludeDefs=[]){
+ const holder=players[owner],g=goalPoint();
+ const excluded=new Set(excludeDefs);
+ const defs=enemies.filter(e=>e.role!=="keeper" && !excluded.has(e));
+ const roles=[];
+ if(!defs.length)return roles;
+ const sorted=defs.slice().sort((a,b)=>dist(a,holder)-dist(b,holder));
+ const finalMark=nearestOffenseToGoal();
+ const nearMark=nearestOffenseToHolder(finalMark?finalMark.i:-1)||nearestOffenseToHolder();
+ const gh=normVec(holder.x-g.x,holder.y-g.y);
+ const side=holder.y>=50?-1:1;
+ const perp={x:-gh.y,y:gh.x};
+ const base=[
+  {role:"DF①誘導", offense:holder.n, target:{x:clamp(holder.x-gh.x*5+perp.x*side*2.2,6,94),y:clamp(holder.y-gh.y*5+perp.y*side*2.2,8,92)}},
+  {role:"DF②フォロー", offense:holder.n, target:{x:clamp(holder.x-gh.x*10+perp.x*side*2.2,6,94),y:clamp(holder.y-gh.y*10+(50-holder.y)*0.25,8,92)}},
+  {role:"DF③近距離", offense:nearMark?nearMark.p.n:"-", target:nearMark?pointBetween(holder,nearMark.p,.72):{x:65,y:50}},
+  {role:"DF④最終", offense:finalMark?finalMark.p.n:"-", target:finalMark?markGoalSideTarget(finalMark.p,3.5):{x:82,y:50}}
+ ];
+ sorted.forEach((def,i)=>{
+  const b=base[Math.min(i,base.length-1)];
+  roles.push({def,role:b.role,target:b.target,offense:b.offense,detail:"通常守備"});
+ });
+ return roles;
+}
+function unusedDefRecoveryRoles(usedDefs){
+ const used=new Set(usedDefs);
+ const g=goalPoint();
+ const assignedOff=new Set((lastNumState&&lastNumState.roles?lastNumState.roles:[]).map(r=>r.offense).filter(Boolean));
+ const candidates=players.map((p,i)=>({p,i}))
+   .filter(x=>!assignedOff.has(x.p.n))
+   .sort((a,b)=>dist(g,a.p)-dist(g,b.p));
+ return enemies.filter(e=>e.role!=="keeper"&&!used.has(e)).map(def=>{
+  let off=candidates.slice().sort((a,b)=>(dist(g,a.p)*0.65+dist(def,a.p)*0.35)-(dist(g,b.p)*0.65+dist(def,b.p)*0.35))[0];
+  if(off){
+   assignedOff.add(off.p.n);
+   return {def,role:"帰陣",target:markGoalSideTarget(off.p,5),offense:off.p.n,detail:"未担当へ全力戻り",fast:true};
+  }
+  return {def,role:"帰陣",target:{x:82,y:50},offense:"ゴール前",detail:"全力戻り",fast:true};
+ });
+}
+function packRoles(roles){
+ const minD=4;
+ for(let iter=0;iter<2;iter++){
+  for(let i=0;i<roles.length;i++){
+   for(let j=i+1;j<roles.length;j++){
+    const a=roles[i].target,b=roles[j].target,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
+    if(d<minD){
+     const push=(minD-d)/2,ux=dx/d,uy=dy/d;
+     roles[j].target={x:clamp(b.x+ux*push,6,94),y:clamp(b.y+uy*push,8,92)};
+     roles[i].target={x:clamp(a.x-ux*push,6,94),y:clamp(a.y-uy*push,8,92)};
+    }
+   }
+  }
+ }
+ return roles;
+}
+
 function numericalDisadvantageRoles(){
  const raw=numericalDisadvantageRaw();
  // 解除は1ターン維持
@@ -547,26 +605,29 @@ function numericalDisadvantageRoles(){
   if(numDisadvClearCount>=2){numDisadvMode=false;numDisadvClearCount=0}
  }
  if(!numDisadvMode){
-  lastNumState={active:false,off:raw.off.length,defs:raw.defs.length,clear:numDisadvClearCount};
+  lastNumState={active:false,off:raw.off.length,defs:raw.defs.length,clear:numDisadvClearCount,roles:[]};
   return null;
  }
- const holder=players[owner],g=goalPoint();
- const defs=(raw.defs.length?raw.defs:enemies.filter(e=>e.role!=="keeper"))
-   .slice().sort((a,b)=>dist(a,holder)-dist(b,holder)).slice(0,3);
+ const holder=players[owner];
+ const allDefs=enemies.filter(e=>e.role!=="keeper");
+ const defs=(raw.defs.length?raw.defs:allDefs).slice().sort((a,b)=>dist(a,holder)-dist(b,holder));
+ const shortage=Math.max(1,raw.off.length-raw.defs.length); // 1vs0=1枚、2vs1=1枚、3vs2=1枚。ただし局面人数で上限を調整
+ const useCount=Math.min(3, Math.max(1, raw.off.length>=4?3:raw.off.length>=3?2:raw.off.length>=2?2:1));
+ const activeDefs=defs.slice(0,useCount);
  const goalSide=goalSideOffensesInEllipse();
  const roles=[];
- if(defs[0]){
-  const helper=defs[1]||null;
+ if(activeDefs[0]){
+  const helper=activeDefs[1]||allDefs.filter(d=>d!==activeDefs[0]).sort((a,b)=>dist(a,holder)-dist(b,holder))[0]||null;
   const pr=pressTargetFor(holder,helper);
-  roles.push({def:defs[0],role:"数不D1",target:pr.target,offense:holder.n,detail:"保持者プレス",direction:pr.direction});
+  roles.push({def:activeDefs[0],role:"数不D1",target:pr.target,offense:holder.n,detail:"保持者プレス",direction:pr.direction});
  }
- if(defs[1]){
-  if(goalSide[0]) roles.push({def:defs[1],role:"数不D2",target:markGoalSideTarget(goalSide[0].p,5),offense:goalSide[0].p.n,detail:"ゴール寄り1位"});
-  else roles.push({def:defs[1],role:"数不D2",target:fallbackSupportTarget(defs[1],holder),offense:holder.n,detail:"フォロー"});
+ if(activeDefs[1]){
+  if(goalSide[0]) roles.push({def:activeDefs[1],role:"数不D2",target:markGoalSideTarget(goalSide[0].p,5),offense:goalSide[0].p.n,detail:"ゴール寄り1位"});
+  else roles.push({def:activeDefs[1],role:"数不D2",target:fallbackSupportTarget(activeDefs[1],holder),offense:holder.n,detail:"フォロー"});
  }
- if(defs[2]){
-  if(goalSide[1]) roles.push({def:defs[2],role:"数不D3",target:markGoalSideTarget(goalSide[1].p,5),offense:goalSide[1].p.n,detail:"ゴール寄り2位"});
-  else roles.push({def:defs[2],role:"数不D3",target:fallbackSupportTarget(defs[2],holder),offense:holder.n,detail:"フォロー"});
+ if(activeDefs[2]){
+  if(goalSide[1]) roles.push({def:activeDefs[2],role:"数不D3",target:markGoalSideTarget(goalSide[1].p,5),offense:goalSide[1].p.n,detail:"ゴール寄り2位"});
+  else roles.push({def:activeDefs[2],role:"数不D3",target:fallbackSupportTarget(activeDefs[2],holder),offense:holder.n,detail:"フォロー"});
  }
  lastNumState={
   active:true,
@@ -593,45 +654,14 @@ function updateNumericalDebug(){
 function v20DefRoles(){
  const numRoles=numericalDisadvantageRoles();
  if(numRoles && numRoles.length){
-  lastDefRoles=numRoles;
-  return numRoles;
+  const used=numRoles.map(r=>r.def);
+  const recovery=unusedDefRecoveryRoles(used);
+  const roles=packRoles(numRoles.concat(recovery));
+  lastDefRoles=roles;
+  if(lastNumState)lastNumState.roles=numRoles;
+  return roles;
  }
- const holder=players[owner],g=goalPoint();
- const defs=enemies.filter(e=>e.role!=="keeper");
- if(defs.length<4)return [];
- const sorted=defs.slice().sort((a,b)=>dist(a,holder)-dist(b,holder));
- let df1=sorted[0],df2=sorted[1],df3=sorted[2],df4=sorted[3];
- if(!isDf1Responsible(df1,holder)&&isDf1Responsible(df2,holder)){const t=df1;df1=df2;df2=t}
- const finalMark=nearestOffenseToGoal();
- const nearMark=nearestOffenseToHolder(finalMark?finalMark.i:-1)||nearestOffenseToHolder();
- const gh=normVec(holder.x-g.x,holder.y-g.y);
- const side=holder.y>=50?-1:1;
- const perp={x:-gh.y,y:gh.x};
- const df1Target={x:clamp(holder.x-gh.x*5+perp.x*side*2.2,6,94),y:clamp(holder.y-gh.y*5+perp.y*side*2.2,8,92)};
- const df2Target={x:clamp(df1Target.x-gh.x*6,6,94),y:clamp(df1Target.y-gh.y*6+(50-df1Target.y)*0.35,8,92)};
- let df3Target={x:70,y:50};
- if(nearMark){df3Target=pointBetween(holder,nearMark.p,.72);df3Target.y+=(50-df3Target.y)*0.08}
- let df4Target={x:82,y:50};
- if(finalMark){const vg=normVec(g.x-finalMark.p.x,g.y-finalMark.p.y);df4Target={x:finalMark.p.x+vg.x*3,y:finalMark.p.y+vg.y*3}}
- const roles=[
-  {def:df1,role:"DF①誘導",target:df1Target,offense:holder.n},
-  {def:df2,role:"DF②フォロー",target:df2Target,offense:holder.n},
-  {def:df3,role:"DF③近距離",target:df3Target,offense:nearMark?nearMark.p.n:"-"},
-  {def:df4,role:"DF④最終",target:df4Target,offense:finalMark?finalMark.p.n:"-"}
- ];
- const minD=4;
- for(let iter=0;iter<2;iter++){
-  for(let i=0;i<roles.length;i++){
-   for(let j=i+1;j<roles.length;j++){
-    const a=roles[i].target,b=roles[j].target,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
-    if(d<minD){
-     const push=(minD-d)/2,ux=dx/d,uy=dy/d;
-     roles[j].target={x:clamp(b.x+ux*push,6,94),y:clamp(b.y+uy*push,8,92)};
-     if(i>1)roles[i].target={x:clamp(a.x-ux*push,6,94),y:clamp(a.y-uy*push,8,92)};
-    }
-   }
-  }
- }
+ const roles=packRoles(makeNormalDefRoles());
  lastDefRoles=roles;
  return roles;
 }
@@ -651,7 +681,8 @@ function defenseMove(reason="",movedPlayer=null){
  if(roles.length){
   roles.forEach(r=>{
    const key=`${r.role}-${r.offense}`;
-   const rate=reactionRateFor(r.def,key,r.target);
+   let rate=reactionRateFor(r.def,key,r.target);
+   if(r.fast)rate=Math.max(rate,0.95);
    moveDefenderToward(r.def,r.target,rate);
   });
   return;
@@ -678,7 +709,7 @@ function drawDangerMap(){
 
 function showJudge(main,sub,duration=1600){judge.innerHTML=`${main}<br><small>${sub}</small>`;judge.style.display="block";clearTimeout(showJudge.timer);showJudge.timer=setTimeout(()=>{judge.style.display="none"},duration)}
 function draw(){
- field.querySelectorAll(".player,.enemy,.circle,.zone,.heat").forEach(e=>e.remove());svg.innerHTML="";
+ field.querySelectorAll(".player,.enemy,.circle,.zone,.heat,.ellipseGuide").forEach(e=>e.remove());svg.innerHTML="";
  targetBox.innerHTML=players.map((p,i)=>`<button class="${i===selected?'active':''}" onclick="selected=${i};draw()">選択 ${p.n}</button>`).join("");
  for(let i=0;i<5;i++){const z=document.createElement("div");z.className="zone";z.style.left=(i*20)+"%";field.appendChild(z)}
  drawDangerMap();
@@ -707,15 +738,20 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v20: 数的不利守備 / 通常カバーリング / 担当楕円 / 表示改善`;
+ status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v20.1: 数的不利守備 / 余りDF帰陣 / 楕円1個化`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  
  if(typeof showTacticalEllipse!=="undefined" && showTacticalEllipse){
-  const h=players[owner],w=df1EllipseWidth(h),g=goalPoint();
+  const h=players[owner],g=goalPoint();
+  const L=dist(h,g),w=df1EllipseWidth(h);
+  const cx=(h.x+g.x)/2,cy=(h.y+g.y)/2;
+  const angle=Math.atan2(g.y-h.y,g.x-h.x)*180/Math.PI;
   const el=document.createElement("div");
   el.className="ellipseGuide";
-  el.style.left=h.x+"%";el.style.top=h.y+"%";
-  el.style.width=(w*2)+"%";el.style.height=Math.max(8,dist(h,g)*.35)+"%";
+  el.style.left=cx+"%";el.style.top=cy+"%";
+  el.style.width=Math.max(10,L)+"%";
+  el.style.height=(w*2)+"%";
+  el.style.transform=`translate(-50%,-50%) rotate(${angle}deg)`;
   field.appendChild(el);
  }
 
