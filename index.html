@@ -501,7 +501,7 @@ function goalSideOffensesInEllipse(){
  const h=players[owner],g=goalPoint();
  const ux=unitToGoalFrom(h).x,uy=unitToGoalFrom(h).y;
  return players.map((p,i)=>({p,i}))
-  .filter(x=>i!==owner && dangerEllipseCheck(x.p) && ((x.p.x-h.x)*ux+(x.p.y-h.y)*uy)>=-0.01)
+  .filter(x=>x.i!==owner && dangerEllipseCheck(x.p) && ((x.p.x-h.x)*ux+(x.p.y-h.y)*uy)>=-0.01)
   .sort((a,b)=>dist(g,a.p)-dist(g,b.p));
 }
 function numericalDisadvantageRaw(){
