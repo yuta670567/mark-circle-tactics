@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mark Circle Tactics</title>
+<title>Mark Circle Tactics v21.1</title>
 <style>
 body{margin:0;background:#071b26;color:white;font-family:sans-serif}
 #app{max-width:920px;margin:auto;padding:8px}
@@ -59,7 +59,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v21 人数判定ライン再構築</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v21.1 P/L人数判定再構築</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -514,14 +514,28 @@ function numericalDisadvantageRoles(){return numericalDisadvantageRolesV21();}
 
 function updateNumericalDebug(){
  if(!numDebug)return;
- if(!lastNumState||!lastNumState.active){
-  const d=lastNumState?`危険エリア：O${lastNumState.off} / D${lastNumState.defs}`:"";
-  numDebug.innerHTML=`<b>■ 数的不利守備</b><br>状態：なし<br>${d}`;
+ if(!lastNumState){
+  numDebug.innerHTML=`<b>■ 人数判定</b><br>状態：未計算`;
   return;
  }
- const lines=lastNumState.roles.map((r,i)=>`${r.role} → ${r.offense}（${r.detail}）`).join("<br>");
- numDebug.innerHTML=`<b>■ 数的不利守備</b><br>状態：${lastNumState.label}<br>危険エリア：O${lastNumState.off} / D${lastNumState.defs}<br>${lines}<br>誘導方向：${lastNumState.direction}<br>解除待ち：${lastNumState.clear?lastNumState.clear:"なし"}`;
+ const line=lastNumState.line||{};
+ const p=line.p?`(${line.p.x.toFixed(1)},${line.p.y.toFixed(1)})`:"-";
+ const l=(line.r||0).toFixed(1);
+ const base=`<b>■ 人数判定</b><br>`+
+  `状態：${lastNumState.active?"数的不利":"通常守備"}<br>`+
+  `人数：OF${lastNumState.off} / DF${lastNumState.defs}<br>`+
+  `有効OF：${lastNumState.offNames&&lastNumState.offNames.length?lastNumState.offNames.join(","):"-"}<br>`+
+  `有効DF：${lastNumState.defNames&&lastNumState.defNames.length?lastNumState.defNames.join(","):"-"}<br>`+
+  `P：${p} / L：${l}${lastNumState.inside?" / 保持者は黄色ゾーン内":""}`;
+ if(!lastNumState.active){
+  numDebug.innerHTML=base;
+  return;
+ }
+ const lines=(lastNumState.roles||[]).map(r=>`${r.role} → ${r.offense}（${r.detail}）`).join("<br>");
+ numDebug.innerHTML=base+`<br>${lines}`;
 }
+
+
 
 
 function stableAngleFactorAt(y){
@@ -543,15 +557,36 @@ function theoreticalYellowAt(x,y){
  const need=minSuccessByDistance(dp);
  return chance>=need;
 }
+
+function yellowBoundaryAt(x,y){
+ // 黄色ゾーンの「中身」ではなく「境界」だけをP候補にする。
+ // 8方向のどこかが黄色外なら境界点。
+ if(!theoreticalYellowAt(x,y))return false;
+ const d=1.5;
+ const dirs=[[d,0],[-d,0],[0,d],[0,-d],[d,d],[d,-d],[-d,d],[-d,-d]];
+ return dirs.some(v=>!theoreticalYellowAt(clamp(x+v[0],6,96),clamp(y+v[1],8,92)));
+}
+function yellowZoneInsideAtPoint(p){
+ return theoreticalYellowAt(p.x,p.y);
+}
+
 function findYellowEntryPoint(holder){
- // コート上を細かく走査して、保持者からS20黄色ゾーンへの最短侵入点Pを探す。
+ // S20・ノーマーク黄色ゾーンへの最短侵入点Pを探す。
+ // Pは黄色ゾーンの内部ではなく「境界点」だけを候補にする。
  // 同距離ならゴール中央に近い点を採用。
  const goal=goalPoint();
+
+ // すでに黄色ゾーン内なら、今はP=保持者として扱う。
+ // ここはコーナー延長などの複雑処理を入れず、v21.1ではロジック検証を優先する。
+ if(yellowZoneInsideAtPoint(holder)){
+  return {p:{x:holder.x,y:holder.y}, r:0, found:true, inside:true};
+ }
+
  let best=null;
- const step=1.5;
+ const step=1.0;
  for(let x=6;x<=96;x+=step){
   for(let y=8;y<=92;y+=step){
-   if(!theoreticalYellowAt(x,y))continue;
+   if(!yellowBoundaryAt(x,y))continue;
    const p={x,y};
    const dh=dist(holder,p);
    const dg=dist(goal,p);
@@ -561,17 +596,19 @@ function findYellowEntryPoint(holder){
   }
  }
  if(!best){
-  // 念のため。黄色ゾーンが見つからない場合はゴール中央手前をP扱い。
   const p={x:88,y:50};
-  return {p, r:dist(holder,p), found:false};
+  return {p, r:dist(holder,p), found:false, inside:false};
  }
- return {p:best.p, r:best.dh, found:true};
+ return {p:best.p, r:best.dh, found:true, inside:false};
 }
+
 function pointInsideJudgeCircle(p,line){
  if(!line || line.r<=0.001)return false;
- // 円周上は含めない。少しだけ厳格に内側判定。
+ // 有効人数ゾーン：Pからの距離がLより短い選手だけ数える。
+ // 円周上は含めない。
  return dist(p,line.p) < line.r - 0.001;
 }
+
 function judgeLineState(){
  const holder=players[owner];
  const line=findYellowEntryPoint(holder);
@@ -583,6 +620,7 @@ function judgeLineState(){
  const defs=enemies.filter(e=>e.role!=="keeper" && pointInsideJudgeCircle(e,line));
  return {holder,line,off,defs,active:off.length>defs.length};
 }
+
 function effectiveOffenseTargets(state){
  const goal=goalPoint();
  return state.off.filter(x=>!x.holder).sort((a,b)=>dist(goal,a.p)-dist(goal,b.p));
@@ -653,30 +691,38 @@ function buildNumericalRoles(state){
 function numericalDisadvantageRolesV21(){
  const state=judgeLineState();
  const holderChanged=numDisadvOwner!==owner;
+
  if(state.active){
+  // 数的不利時のD1/D2/D3担当は保持者変更時のみ再割当。
   if(!numDisadvMode || holderChanged || !numDisadvRoles){
    numDisadvRoles=buildNumericalRoles(state);
    numDisadvOwner=owner;
   }
   numDisadvMode=true;
  }else{
+  // OF <= DF なら通常守備へ戻す。
   numDisadvMode=false;
   numDisadvRoles=null;
   numDisadvOwner=-1;
  }
+
  lastNumState={
   active:numDisadvMode,
+  rawActive:state.active,
   off:state.off.length,
   defs:state.defs.length,
   line:state.line,
   roles:numDisadvRoles||[],
   offNames:state.off.map(x=>x.p.n),
-  defNames:state.defs.map(x=>`${x.p?x.p.n:""}${x.def||""}`).filter(Boolean),
-  found:state.line.found
+  defNames:state.defs.map(x=>`${x.def||""}/V${x.spd||6}`),
+  found:state.line.found,
+  inside:!!state.line.inside
  };
+
  if(!numDisadvMode)return null;
  return numDisadvRoles||[];
 }
+
 function makeNormalDefRoles(excludeDefs=[]){
  const holder=players[owner],g=goalPoint();
  const excluded=new Set(excludeDefs);
@@ -719,15 +765,26 @@ function packRoles(roles,strict=true){
 function updateNumericalDebug(){
  if(!numDebug)return;
  if(!lastNumState){
-  numDebug.innerHTML=`<b>■ 人数判定</b><br>未計算`;
+  numDebug.innerHTML=`<b>■ 人数判定</b><br>状態：未計算`;
   return;
  }
- const s=lastNumState;
- const state=s.active?"数的不利":"通常";
- const roleLines=(s.roles||[]).map(r=>`${r.role} → ${r.offense}（${r.detail||""}）`).join("<br>")||"なし";
- const p=s.line&&s.line.p?`P(${s.line.p.x.toFixed(1)}, ${s.line.p.y.toFixed(1)}) / 半径${s.line.r.toFixed(1)}`:"Pなし";
- numDebug.innerHTML=`<b>■ 人数判定</b><br>状態：${state}<br>人数：OF${s.off} / DF${s.defs}<br>${p}<br>有効OF：${s.offNames.join(", ")||"なし"}<br>有効DF：${s.defNames.join(", ")||"なし"}<br>${roleLines}`;
+ const line=lastNumState.line||{};
+ const p=line.p?`(${line.p.x.toFixed(1)},${line.p.y.toFixed(1)})`:"-";
+ const l=(line.r||0).toFixed(1);
+ const base=`<b>■ 人数判定</b><br>`+
+  `状態：${lastNumState.active?"数的不利":"通常守備"}<br>`+
+  `人数：OF${lastNumState.off} / DF${lastNumState.defs}<br>`+
+  `有効OF：${lastNumState.offNames&&lastNumState.offNames.length?lastNumState.offNames.join(","):"-"}<br>`+
+  `有効DF：${lastNumState.defNames&&lastNumState.defNames.length?lastNumState.defNames.join(","):"-"}<br>`+
+  `P：${p} / L：${l}${lastNumState.inside?" / 保持者は黄色ゾーン内":""}`;
+ if(!lastNumState.active){
+  numDebug.innerHTML=base;
+  return;
+ }
+ const lines=(lastNumState.roles||[]).map(r=>`${r.role} → ${r.offense}（${r.detail}）`).join("<br>");
+ numDebug.innerHTML=base+`<br>${lines}`;
 }
+
 
 function v20DefRoles(){
  const numRoles=numericalDisadvantageRolesV21();
@@ -817,18 +874,20 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v21: 人数判定ライン / 黄色ゾーンP / 数的不利再構築`;
+ status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v21.1: P/L人数判定 / 境界P修正 / コーナー延長保留`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  
 
 
  if(typeof showTacticalEllipse!=="undefined" && showTacticalEllipse && lastNumState && lastNumState.line && lastNumState.line.p){
   const line=lastNumState.line;
-  const jl=document.createElement("div");
-  jl.className="judgeLine";
-  jl.style.left=line.p.x+"%";jl.style.top=line.p.y+"%";
-  jl.style.width=(line.r*2)+"%";jl.style.height=(line.r*2)+"%";
-  field.appendChild(jl);
+  if(line.r>0.001){
+   const jl=document.createElement("div");
+   jl.className="judgeLine";
+   jl.style.left=line.p.x+"%";jl.style.top=line.p.y+"%";
+   jl.style.width=(line.r*2)+"%";jl.style.height=(line.r*2)+"%";
+   field.appendChild(jl);
+  }
   const ep=document.createElement("div");
   ep.className="entryPoint";
   ep.style.left=line.p.x+"%";ep.style.top=line.p.y+"%";
@@ -845,13 +904,13 @@ createTeam();createEnemies();resetMatch();
 <script>
 document.addEventListener("DOMContentLoaded",()=>{
  const btn=document.createElement("button");
- btn.textContent="人数判定 OFF";
+ btn.textContent="人数判定表示 OFF";
  btn.style.position="fixed";btn.style.right="12px";btn.style.bottom="58px";btn.style.zIndex="50";
- btn.onclick=()=>{showTacticalEllipse=!showTacticalEllipse;btn.textContent=showTacticalEllipse?"人数判定 ON":"人数判定 OFF";draw();};
+ btn.onclick=()=>{showTacticalEllipse=!showTacticalEllipse;btn.textContent=showTacticalEllipse?"人数判定表示 ON":"人数判定表示 OFF";draw();};
  document.body.appendChild(btn);
 });
 </script>
 
-<!-- V20 generated: numerical disadvantage defense mode -->
+<!-- V21.1 generated: P/L effective player counting, yellow boundary P, corner extension postponed -->
 </body>
 </html>
