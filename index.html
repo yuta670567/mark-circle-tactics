@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mark Circle Tactics v22.1</title>
+<title>Mark Circle Tactics v22.2</title>
 <style>
 body{margin:0;background:#071b26;color:white;font-family:sans-serif}
 #app{max-width:920px;margin:auto;padding:8px}
@@ -52,7 +52,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v22.1 D1-D4通常守備再整理</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v22.2 D1選定小修正</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -582,12 +582,12 @@ function numericalDisadvantageRoles(){
 function updateNumericalDebug(){
  if(!numDebug)return;
  if(!lastDefRoles||!lastDefRoles.length){
-  numDebug.innerHTML=`<b>■ V22守備</b><br>未計算`;
+  numDebug.innerHTML=`<b>■ V22.2守備</b><br>未計算`;
   return;
  }
  const lines=lastDefRoles.map(r=>`${r.role} → ${r.offense} / ${r.purpose}（${r.detail}${r.corrected?"・重複補正":""}）`).join("<br>");
  const corrected=lastDefRoles.some(r=>r.corrected)?"あり":"なし";
- numDebug.innerHTML=`<b>■ V22守備</b><br>${lines}<br>重複補正：${corrected}<br>重複許可：黄色ゾーン内・境界付近`;
+ numDebug.innerHTML=`<b>■ V22.2守備</b><br>${lines}<br>重複補正：${corrected}<br>重複許可：黄色ゾーン内・境界付近`;
 }
 
 
@@ -650,10 +650,66 @@ function offenseNearHolderByRank(rank){
  const arr=goalSideOffensesFromHolder().sort((a,b)=>dist(h,a.p)-dist(h,b.p));
  return arr[rank]||null;
 }
+// ============================
+// v22.2 NEW - D1 assignment small patch
+// D1は固定DFではなく「保持者担当」役割。
+// まず保持者→黄色ゾーン最短侵入点Pの線分に間に合うDFを優先し、
+// その中で保持者へ近いDFを選ぶ。D2-D4はv22.1の割当を維持する。
+// ============================
+function distancePointToSegment(pt,a,b){
+ const vx=b.x-a.x,vy=b.y-a.y,len2=vx*vx+vy*vy;
+ if(!len2)return Math.hypot(pt.x-a.x,pt.y-a.y);
+ const t=clamp(((pt.x-a.x)*vx+(pt.y-a.y)*vy)/len2,0,1);
+ const px=a.x+vx*t,py=a.y+vy*t;
+ return Math.hypot(pt.x-px,pt.y-py);
+}
+function nearestYellowEntryPointFrom(holder){
+ // v22.2 NEW: 保持者が最短で侵入できる黄色ゾーン上の点を粗く探索する。
+ // 既存の theoreticalYellowAt() を使い、黄色ゾーン定義自体は増やさない。
+ let best=null,bestD=999;
+ const step=2;
+ for(let x=6;x<=96;x+=step){
+  for(let y=8;y<=92;y+=step){
+   if(!theoreticalYellowAt(x,y))continue;
+   const d=Math.hypot(holder.x-x,holder.y-y);
+   if(d<bestD){bestD=d;best={x,y}}
+  }
+ }
+ return best||goalPoint();
+}
+function minDistanceToOtherOffense(def){
+ // v22.2 NEW: 同条件なら、他OFから遠いDFを優先するための指標。
+ let best=999;
+ players.forEach((p,i)=>{if(i===owner)return;best=Math.min(best,dist(def,p))});
+ return best;
+}
+function d1CandidateInfo(def,holder,entry){
+ const routeDistance=distancePointToSegment(def,holder,entry);
+ const holderDistance=dist(def,holder);
+ const holderRouteLength=Math.max(1,dist(holder,entry));
+ const standardDribbleSpeed=6;
+ const holderTurns=holderRouteLength/standardDribbleSpeed;
+ const defenderTurns=routeDistance/(def.spd||6);
+ const canCutRoute=defenderTurns<=holderTurns;
+ const otherOffenseDistance=minDistanceToOtherOffense(def);
+ return {def,routeDistance,holderDistance,holderRouteLength,holderTurns,defenderTurns,canCutRoute,otherOffenseDistance};
+}
 function chooseDefendersV22(){
  const defs=enemies.filter(e=>e.role!=="keeper");
  const h=players[owner];
- const df1=defs.slice().sort((a,b)=>dist(a,h)-dist(b,h))[0]||null;
+ const entry=nearestYellowEntryPointFrom(h);
+ const infos=defs.map(d=>d1CandidateInfo(d,h,entry));
+ infos.sort((a,b)=>{
+  // 1) 黄色ゾーン侵入ルートに間に合うDFを優先
+  if(a.canCutRoute!==b.canCutRoute)return a.canCutRoute?-1:1;
+  // 2) 保持者に近いDFを優先
+  if(Math.abs(a.holderDistance-b.holderDistance)>0.01)return a.holderDistance-b.holderDistance;
+  // 3) 同条件なら他OFから遠いDFを優先
+  return b.otherOffenseDistance-a.otherOffenseDistance;
+ });
+ const df1Info=infos[0]||null;
+ const df1=df1Info?df1Info.def:null;
+ if(df1)df1._v22D1Info=df1Info;
  const rest=defs.filter(d=>d!==df1);
  const g=goalPoint();
  const df2=rest.slice().sort((a,b)=>dist(a,g)-dist(b,g))[0]||null;
@@ -662,6 +718,7 @@ function chooseDefendersV22(){
  const df4=rest2.filter(d=>d!==df3)[0]||null;
  return [df1,df2,df3,df4].filter(Boolean);
 }
+
 function applyTargetOverlapCorrection(roles){
  // 黄色ゾーン内・境界付近は重複OK。それ以外で目標位置が3マス未満なら低優先側をずらす。
  let corrected=false;
@@ -696,7 +753,9 @@ function v20DefRoles(){
 
  const roles=[];
  if(defs[0]){
-  roles.push({def:defs[0],role:"D1保持者",purpose:"奪取",target:{x:holder.x,y:holder.y},offense:holder.n,detail:"保持者へ直接プレス"});
+  const info=defs[0]._v22D1Info;
+  const d1Detail=info?`v22.2 NEW 侵入路${info.canCutRoute?"可":"不可"} / H距離${info.holderDistance.toFixed(1)} / 線分${info.routeDistance.toFixed(1)}`:"保持者へ直接プレス";
+  roles.push({def:defs[0],role:"D1保持者",purpose:"奪取",target:{x:holder.x,y:holder.y},offense:holder.n,detail:d1Detail});
  }
  if(defs[1]&&finalMark){
   roles.push({def:defs[1],role:"D2シュートカット",purpose:"シュートカット",target:goalSideTargetFromOffense(finalMark.p,0.2),offense:finalMark.p.n,detail:"ゴール最短OF"});
@@ -788,17 +847,9 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v22.1: D1保持者 / D2シュートカット / D3-D4前進パス / 表示修正`;
+ status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v22.2: D1選定改善 / D2-D4維持 / 楕円廃止`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  
- if(typeof showTacticalEllipse!=="undefined" && showTacticalEllipse){
-  const h=players[owner],w=df1EllipseWidth(h),g=goalPoint();
-  const el=document.createElement("div");
-  el.className="ellipseGuide";
-  el.style.left=h.x+"%";el.style.top=h.y+"%";
-  el.style.width=(w*2)+"%";el.style.height=Math.max(8,dist(h,g)*.35)+"%";
-  field.appendChild(el);
- }
 
 updateNumericalDebug();
 updateShootButton();
@@ -807,16 +858,7 @@ window.addEventListener("error",e=>{msg.textContent="エラー："+e.message});
 createTeam();createEnemies();resetMatch();
 </script>
 
-<script>
-document.addEventListener("DOMContentLoaded",()=>{
- const btn=document.createElement("button");
- btn.textContent="D1範囲表示 OFF";
- btn.style.position="fixed";btn.style.right="12px";btn.style.bottom="58px";btn.style.zIndex="50";
- btn.onclick=()=>{showTacticalEllipse=!showTacticalEllipse;btn.textContent=showTacticalEllipse?"D1範囲表示 ON":"D1範囲表示 OFF";draw();};
- document.body.appendChild(btn);
-});
-</script>
 
-<!-- V20 generated: numerical disadvantage defense mode -->
+<!-- V22.2 generated: small D1 assignment patch -->
 </body>
 </html>
