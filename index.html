@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mark Circle Tactics v22.2</title>
+<title>Mark Circle Tactics v22.2-clean</title>
 <style>
 body{margin:0;background:#071b26;color:white;font-family:sans-serif}
 #app{max-width:920px;margin:auto;padding:8px}
@@ -52,7 +52,7 @@ button{padding:10px;border-radius:10px;border:0;font-size:15px;font-weight:bold;
 </head>
 <body>
 <div id="app">
-  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v22.2 D1選定小修正</span></h1>
+  <h1>Mark Circle Tactics <span style="font-size:12px;opacity:.75">v22.2-clean D1選定小修正（重複関数整理）</span></h1>
   <div id="field"><svg id="lines"></svg><div id="goal">GOAL</div><div id="judge"></div></div>
   <div id="targetBox"></div>
   <div id="controls">
@@ -256,9 +256,9 @@ function counterAttack(){const enemyPower=rand(10,22)+Math.floor(enemies.reduce(
 function lineBlockPosition(from,to,ratio=.52){
  return {x:from.x*(1-ratio)+to.x*ratio,y:from.y*(1-ratio)+to.y*ratio};
 }
-function blendPos(a,b,rate){
- return {x:a.x*(1-rate)+b.x*rate,y:a.y*(1-rate)+b.y*rate};
-}
+
+/* v22.2-clean: removed overridden duplicate function blendPos from original line 259. Last declaration is kept; runtime behavior should be unchanged. */
+
 function ballDistanceWeight(target){
  const ball=players[owner];
  const d=dist(ball,target);
@@ -286,38 +286,12 @@ function nearestEnemyByRole(role){
  enemies.forEach(e=>{if(e.role!==role)return;const d=dist(e,players[owner]);if(d<bestD){best=e;bestD=d}});
  return best;
 }
-function forceOffballFollow(movedPlayer){
- if(!movedPlayer)return;
- const ball=players[owner];
 
- // フィニッシャー単独のオフボールで簡単に完全フリーを作らせない
- if(movedPlayer.role==="フィニッシャー"){
-  const marker=enemies.find(e=>e.role==="mark");
-  if(marker){
-   const farBall=dist(ball,movedPlayer)>=24;
-   const target=markTargetPosition(movedPlayer,"E");
-   const react=farBall?.82:.58;
-   marker.x+= (target.x-marker.x)*react;
-   marker.y+= (target.y-marker.y)*react;
-  }
- }
+/* v22.2-clean: removed overridden duplicate function forceOffballFollow from original line 289. Last declaration is kept; runtime behavior should be unchanged. */
 
- // サイド保持者に対してはPRESSが即時に詰める
- if(movedPlayer===ball || ball.role==="右サイド" || ball.role==="左サイド"){
-  const press=enemies.find(e=>e.role==="press");
-  if(press){
-   const target=pressTargetPosition(ball,.90);
-   press.x+=(target.x-press.x)*.60;
-   press.y+=(target.y-press.y)*.60;
-  }
- }
-}
-function pressTargetPosition(attacker,aggression=.78){
- const ball=players[owner];
- const goalCut=goalSidePosition(attacker,.70);
- const ballLane=lineBlockPosition(ball,attacker,.62);
- return blendPos(goalCut,ballLane,1-aggression);
-}
+
+/* v22.2-clean: removed overridden duplicate function pressTargetPosition from original line 315. Last declaration is kept; runtime behavior should be unchanged. */
+
 function holderPressureBonus(){
  return Math.min(12,holdTurn*3);
 }
@@ -859,6 +833,6 @@ createTeam();createEnemies();resetMatch();
 </script>
 
 
-<!-- V22.2 generated: small D1 assignment patch -->
+<!-- V22.2-clean generated: duplicate declarations removed, no intended gameplay changes -->
 </body>
 </html>
