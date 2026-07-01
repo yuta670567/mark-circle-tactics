@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mark Circle Tactics v22.4</title>
+<title>Mark Circle Tactics v22.5</title>
 <style>
 body{margin:0;background:#071b26;color:white;font-family:sans-serif}
 #app{max-width:920px;margin:auto;padding:8px}
@@ -629,7 +629,7 @@ function offenseNearHolderByRank(rank){
 // D1は固定DFではなく「保持者担当」役割。
 // まず保持者→黄色ゾーン最短侵入点Pの線分に間に合うDFを優先し、
 // その中で保持者へ近いDFを選ぶ。
-// v22.4では、選定だけでなく移動目標も保持者本人ではなく侵入ルート上のカット地点にする。
+// v22.5では、D1が現在地と同じカット地点で止まらないよう、侵入ルートの手前側へ移動目標を置く。
 // D2-D4はv22.1の割当を維持する。
 // ============================
 function distancePointToSegment(pt,a,b){
@@ -726,6 +726,17 @@ function applyTargetOverlapCorrection(roles){
  return corrected;
 }
 
+function d1RouteTargetFromInfo(info,holder){
+ // v22.5: 最近接点そのものを目標にすると、DFが既に線上にいる場合に動かない。
+ // そこで、保持者→黄色ゾーン侵入点の線分上で、最近接点より少し保持者側の「手前カット地点」を狙う。
+ if(!info||!info.entry)return {x:holder.x,y:holder.y,t:0};
+ const cutT=typeof info.cutPoint?.t==="number"?info.cutPoint.t:.45;
+ const targetT=clamp(cutT-.22,.18,.48);
+ const x=holder.x+(info.entry.x-holder.x)*targetT;
+ const y=holder.y+(info.entry.y-holder.y)*targetT;
+ return {x:clamp(x,6,94),y:clamp(y,8,92),t:targetT};
+}
+
 function v20DefRoles(){
  const holder=players[owner];
  const defs=chooseDefendersV22();
@@ -738,9 +749,9 @@ function v20DefRoles(){
  const roles=[];
  if(defs[0]){
   const info=defs[0]._v22D1Info;
-  const d1Target=info?info.cutPoint:{x:holder.x,y:holder.y};
-  const d1Detail=info?`v22.4 侵入路${info.canCutRoute?"可":"不可"} / H距離${info.holderDistance.toFixed(1)} / 線分${info.routeDistance.toFixed(1)} / cut${info.cutPoint.t.toFixed(2)}`:"保持者へ直接プレス";
-  roles.push({def:defs[0],role:"D1保持者",purpose:"侵入路カット",target:d1Target,offense:holder.n,detail:d1Detail});
+  const d1Target=info?d1RouteTargetFromInfo(info,holder):{x:holder.x,y:holder.y,t:0};
+  const d1Detail=info?`v22.5 侵入路${info.canCutRoute?"可":"不可"} / H距離${info.holderDistance.toFixed(1)} / 線分${info.routeDistance.toFixed(1)} / cut${info.cutPoint.t.toFixed(2)}→target${d1Target.t.toFixed(2)}`:"保持者へ直接プレス";
+  roles.push({def:defs[0],role:"D1保持者",purpose:"侵入路手前カット",target:d1Target,offense:holder.n,detail:d1Detail});
  }
  if(defs[1]&&finalMark){
   roles.push({def:defs[1],role:"D2シュートカット",purpose:"シュートカット",target:goalSideTargetFromOffense(finalMark.p,0.2),offense:finalMark.p.n,detail:"ゴール最短OF"});
@@ -832,7 +843,7 @@ function draw(){
  el.onclick=()=>passTo(i);
  field.appendChild(el);
 });
- status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v22.4: D1移動先を侵入ルート上へ修正 / 表示停止バグ修正 / D2-D4維持`;
+ status.innerHTML=`得点：${score}　ターン：${attackTurn}/${turn}　ボール保持：${players[owner].n} ${players[owner].role}　選択中：${players[selected].n}<br>v22.5: D1移動先を侵入ルート手前へ修正 / D2-D4維持`;
  roster.innerHTML=players.map(p=>`<div class="card"><b>${p.n} ${p.role}</b><br>P${p.pass} / S${p.shoot} / O${p.one} / V${p.spd}</div>`).join("")+`<div class="card"><b>GK</b><br>守備 ${enemies.find(e=>e.role==="keeper").def} / V${enemies.find(e=>e.role==="keeper").spd||6}</div>`;
  
 
